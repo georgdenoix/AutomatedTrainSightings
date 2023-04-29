@@ -1,0 +1,27 @@
+cam_id,cam_type,cam_description,fb_posting,nr_enable,nr_version,nr_training,motion_enable,mask,disable_capture,right_orientation,left_orientation,motion_threshold
+3319,511,"CN Kingston, Aut. 20 at rue Morgan (Beaconsfield)",x,x,6,x,x,x,,East,West,5
+3326,511,"CN Rouses Point, Aut. 10 at boul. Leduc",,,,x,x,x,,South,North,5
+3362,511,"CP Adirondack, Aut. 20, west of Saint-Pierre interchange",,x,2,x,x,x,,North,South,5
+3365,511,"CN Montreal, Aut 20 at 24th",x,x,3,x,x,x,,East,West,5
+3367,511,"CN Montreal, Aut. 20 at 55e Avenue (Dorval)",x,x,5,x,x,x,,East,West,5
+3371,511,"CN Kingston, Aut. 20 at av. Oakville (Gare Pine Beach)",,x,3,x,x,x,,East,West,5
+3373,511,"CN Kingston, Aut. 20 (Sainte-Anne-de-Bellevue side)",,x,2,x,x,x,,East,West,5
+3375,511,"CN Kingston, Aut. 20 at Dorion",,,,x,,,,East,West,5
+3378,511,"CN St-Hyacinthe, Route 112 (east) at pont Victoria",x,x,8,x,x,x,,East,West,5
+3399,511,"CP Vaudreuil, Aut. 13 at aut. 20 (Lachine)",x,x,3,x,x,x,,East,West,5
+3814,511,"CN Montreal, Aut. 20 at boul. Angrignon (Turcot Ouest)",,,,x,,,,East,West,5
+3830,511,"CN Montreal, Route 136 (westward) at échangeur Turcot (East)",,,,x,,,,East,West,5
+3899,511,"CP Vaudreuil, Aut. 20 at Dorval interchange",x,x,6,x,x,x,,West,East,5
+3351,511,,,,,,,,x,,,
+3379,511,,,,,,,,x,,,
+3380,511,,,,,,,,x,,,
+212,vdm,,,,,,,,,,,
+119,vdm,,,,,,,,,,,
+258,vdm,,,,,,,,,,,
+268,vdm,,,,,,,,,,,
+467,vdm,,,,,,,,,,,
+513,vdm,,,,,,,,,,,
+505,vdm,,,,,,,,,,,
+180,vdm,,,,,,,,,,,
+458,vdm,,,,,,,,,,,
+335,vdm,,,,,,,,,,,
