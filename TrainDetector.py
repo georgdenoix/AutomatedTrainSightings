@@ -21,7 +21,7 @@ from facebook import GraphAPI
 
 class image_capture:
 
-    def __init__(self, root_folder = '', input_root_folder = 'inbox', output_root_folder = 'results', cam_num = 0, configuration_file = 'train_detection_configuration.csv', fb_credential_file = '', cam_type = '511'):
+    def __init__(self, root_folder = '', input_root_folder = 'inbox', output_root_folder = 'results', cam_num = 0, configuration_file = 'train_detection_configuration.csv', fb_credential_file = ''):
 
         # event logging
         self.log = logging.getLogger(__name__)
@@ -29,12 +29,12 @@ class image_capture:
         # base parameters
         self.configuration_file = configuration_file
         self.fb_credential_file = fb_credential_file
-        self.cam_type = cam_type
         self.root_folder = root_folder
         self.base_file_name = ''
         self.image_file_names = []
         self.video_file_name = ''
         self.cam_num = cam_num
+        #self.cam_format = 'mp4'
         self.date = ''
         self.week_day = ''
         self.time = ''
@@ -66,39 +66,24 @@ class image_capture:
         self.output_folder_notrain = ''
 
         # configuration (to be read from configuration file)
-        self.cam_description = ''
-        self.fb_posting = False
-        self.nr_enable = False
-        self.nr_version = -1
-        self.nr_training = True
-        self.motion_enable = False
-        self.mask = False
-        self.disable_capture = True
-        self.right_orientation = 'None'
-        self.left_orientation = 'None'
-        self.motion_threshold = 5
+        self.cam_config = {}
+
+        self.nr_disable = False  # keep in case model cannot be loaded
+        self.loaded_nr_version = -1   # keep to identify if new version specified
 
         # read configuration
         self.read_configuration()
 
-        # load classification model
-        if self.nr_enable:
-            try:
-                self.nr_model = load_model(os.path.join(root_folder, 'models\\neural networks', f'cam{self.cam_num}_model_v{self.nr_version}.h5'))
-            except:
-                # disable classification if loading model failed
-                self.nr_model = False
-                self.nr_enable = False
-        else:
-            self.nr_model = False
+        # load classification model  ==>   put into function, so that model could be loaded dynamically at runtime whenever a new configuration is found
+        self.load_model()
 
         # read facebook credentials
         self.page_graph = False
         try:
             page_credentials = self.read_fb_creds(os.path.join(root_folder, self.fb_credential_file))
             self.page_graph = GraphAPI(access_token = page_credentials['access_token'])
-        except Exception as e: # work on python 3.x
-            print('image_capture (init): Could not load fb credentials: ' + str(e))
+        except Exception as ex: # work on python 3.x
+            self.log.error('image_capture (init): Could not load fb credentials: ' + str(ex))
 
         self.fb = fb_helper(self.page_graph)
 
@@ -112,25 +97,55 @@ class image_capture:
                 self.set_output_folder()
                 #self.acquire_camera_data(self.cam_num)
 
+    def load_model(self):
+        nr_version = self.conf_value('nr_version')
+        model_file_name = ''
+
+        # Load model when configured version larger than previously loaded version
+        if self.conf_value('nr_enable') and nr_version != self.loaded_nr_version:
+            self.log.info(f'load_model: Loading new model for self.cam_num; new version: {nr_version}, previous: {self.loaded_nr_version}')
+            try:
+                model_version = int(nr_version)
+                model_file_name = os.path.join(self.root_folder, 'models\\neural networks', f'cam{self.cam_num}_model_v{model_version}.h5')
+            except Exception as ex:
+                self.loaded_nr_version = -1
+                self.nr_model = False
+                self.nr_disable = True
+                self.log.error(f'load_model: Could not determine model version:' + str(ex))
+
+            try:
+                self.nr_model = load_model(model_file_name)
+                self.loaded_nr_version = nr_version
+                self.log.info(f'load_model: successfully loaded {model_file_name} for camera {self.cam_num}.')
+            except Exception as ex:
+                # disable classification if loading model failed
+                self.nr_model = False
+                self.nr_disable = True
+                self.log.error(f'load_model: Could not load model {model_file_name}:' + str(ex))
+        else:
+            self.log.debug(f'load_model: Loading model skipped for cam {self.cam_num}.')
+            self.nr_disable = True
+            self.nr_model = False
+
     # set the root folder for all further operations
     def set_root_folder(self, folder_name = ''):
 
         if not os.path.isdir(folder_name):
             try:
                 os.makedirs(folder_name)
-            except:
-                print(f'set_root_folder: could not create {folder_name}')
+            except Exception as ex:
+                self.log.error(f'set_root_folder: could not create {folder_name}: ' + str(ex))
 
         return True
 
     def set_input_folder(self):
 
         if self.root_folder == '':
-            print('set_input_folder: need to define root folder first')
+            self.log.error('set_input_folder: need to define root folder first')
             return False
 
         if self.cam_num == 0:
-            print('set_output_folder: cam num needs to be defined first')
+            self.log.error('set_output_folder: cam num needs to be defined first')
             return False
 
         date_str = datetime.now().strftime("%Y-%m-%d")
@@ -145,42 +160,93 @@ class image_capture:
     def set_output_folder(self):
 
         if self.root_folder == '':
-            print('set_output_folder: need to define root folder first')
+            self.log.error('set_output_folder: need to define root folder first')
             return False
 
         if self.cam_num == 0:
-            print('set_output_folder: cam num needs to be defined first')
+            self.log.error('set_output_folder: cam num needs to be defined first')
             return False
 
         output_folder_root = os.path.join(self.root_folder, self.output_root_folder)
 
         if not os.path.isdir(output_folder_root):
-            os.makedirs(output_folder_root)
+            try:
+                os.makedirs(output_folder_root)
+            except Exception as ex:
+                self.log.error(f'set_output_folder: could not create {output_folder_root}: ' + str(ex))
 
         # create further structure underneath
-        try:
-            os.makedirs(os.path.join(output_folder_root, 'media'))
-        except:
-            pass
+        media_folder = os.path.join(output_folder_root, 'media')
+        if not os.path.isdir(media_folder):
+            try:
+                os.makedirs(media_folder)
+            except Exception as ex:
+                self.log.error(f'set_output_folder: could not create {media_folder}: ' + str(ex))
 
         # train branch
-
         date_str = datetime.now().strftime("%Y-%m-%d")
+
         self.output_folder_train = os.path.join(output_folder_root, 'media', 'train', str(self.cam_num), date_str)
-        try:
-            os.makedirs(os.path.join(self.root_folder, self.output_folder_train))
-        except:
-            pass
+        output_folder_train = os.path.join(self.root_folder, self.output_folder_train)
+        if not os.path.isdir(output_folder_train):
+            try:
+                os.makedirs(output_folder_train)
+            except Exception as ex:
+                self.log.error(f'set_output_folder: could not create {output_folder_train}' + str(ex))
 
-        # no train branch
-
+        # no_train branch
         self.output_folder_notrain = os.path.join(output_folder_root, 'media', 'no_train', str(self.cam_num), date_str)
-        try:
-            os.makedirs(os.path.join(self.root_folder, self.output_folder_notrain))
-        except:
-            pass
+        output_folder_notrain = os.path.join(self.root_folder, self.output_folder_notrain)
+        if not os.path.isdir(output_folder_notrain):
+            try:
+                os.makedirs(output_folder_notrain)
+            except Exception as ex:
+                self.log.error(f'set_output_folder: could not create {output_folder_notrain}' + str(ex))
 
         return True
+
+    # function to read individual configuration value
+    def conf_value(self, key):
+
+        # initialise with FALSE
+        ret_val = False
+        use_config = {}
+
+        # check if list, if so, take first element
+        if isinstance(self.cam_config, list):
+            if len(self.cam_config) > 0:
+                use_config = self.cam_config[0]
+        else:
+            use_config = self.cam_config
+
+        # needs to be dictionary to work
+        if isinstance(use_config, dict):
+
+            if key in use_config.keys():
+                read_val = use_config[key]
+            else:
+                self.log.error(f'conf_value - key {key} does not exist.')
+                read_val = False
+
+            # clean strings
+            if isinstance(read_val, str):
+                ret_val = read_val.replace(u'\xa0', u' ')
+
+            if isinstance(read_val, int) or isinstance(read_val, float):
+                ret_val = read_val
+
+            # 'x' means TRUE boolean configuration
+            if read_val == 'x':
+                ret_val = True
+
+            # nan means FALSE
+            if isinstance(read_val, float):
+                if math.isnan(read_val):
+                    ret_val = False
+        else:
+            self.log.error('conf_value: configuration passed is not a dictionary.')
+
+        return ret_val
 
     # Read camera configuration from csv file
     def read_configuration(self):
@@ -188,70 +254,18 @@ class image_capture:
         incomplete_reading = False
 
         try:
-            configuration = pd.read_csv(os.path.join(self.root_folder, self.configuration_file), encoding = "ISO-8859-1")
-            self.log.info(f'Configuration successfully read from configuration file: {self.configuration_file}')
-        except:
-            self.log.error(f'read_configuration: could not read {self.configuration_file}.')
+            configuration_pd = pd.read_csv(os.path.join(self.root_folder, self.configuration_file), encoding = "ISO-8859-1")
+            self.log.debug(f'Configuration for camera {self.cam_num} successfully read from configuration file: {self.configuration_file}')
+        except Exception as ex:
+            self.log.error(f'read_configuration: could not read {self.configuration_file}: {str(ex)}')
             return False
 
         # check if configuration contains an entry for this camera
-        if not (configuration['cam_id'] == self.cam_num).any():
+        if not (configuration_pd['cam_id'] == self.cam_num).any():
             self.log.error(f'read_configuration: {self.configuration_file} has no entry for camera {self.cam_num}.')
             return False
 
-        # access data for this camera, iloc[0] selects first line, assuming we have no duplicates
-        this_cam_config = configuration.loc[(configuration['cam_id'] == self.cam_num)].iloc[0]
-
-        # read camera type
-        try:
-            if isinstance(this_cam_config['cam_type'], str):
-                self.cam_type = this_cam_config['cam_type'].replace(u'\xa0', u' ')
-        except Exception as e:
-            self.log.error(f'read_configuration: {self.configuration_file} for camera {self.cam_num} encountered an issue accessing cam_type: ' + str(e))
-            incomplete_reading = True
-
-        try:
-            if isinstance(this_cam_config['cam_description'], str):
-                self.cam_description = this_cam_config['cam_description'].replace(u'\xa0', u' ')
-        except:
-            self.log.error(f'read_configuration: {self.configuration_file} for camera {self.cam_num} encountered an issue accessing cam_description.')
-            incomplete_reading = True
-
-        try:
-            self.fb_posting = this_cam_config['fb_posting'] == 'x'
-            self.nr_enable = this_cam_config['nr_enable'] == 'x'
-            self.nr_training = this_cam_config['nr_training'] == 'x'
-            self.motion_enable = this_cam_config['motion_enable'] == 'x'
-            self.mask = this_cam_config['mask'] == 'x'
-            self.disable_capture = this_cam_config['disable_capture'] == 'x'
-        except Exception as ex:
-            self.log.error(f'read_configuration: {self.configuration_file} for camera {self.cam_num} encountered an issue accessing one of the boolean parameters: {str(ex)}')
-            incomplete_reading = True
-
-        self.nr_version = -1
-        try:
-            if not math.isnan(this_cam_config['nr_version']):
-                self.nr_version = int(this_cam_config['nr_version'])
-        except:
-            self.log.error(f'read_configuration: {self.configuration_file} for camera {self.cam_num} encountered an issue accessing nr_version.')
-            incomplete_reading = True
-
-        self.motion_threshold = 5
-        try:
-            if not math.isnan(this_cam_config['motion_threshold']):
-                self.motion_threshold = int(this_cam_config['motion_threshold'])
-        except:
-            self.log.error(f'read_configuration: {self.configuration_file} for camera {self.cam_num} encountered an issue accessing motion_threshold.')
-            incomplete_reading = True
-
-        try:
-            if isinstance(this_cam_config['right_orientation'], str):
-                self.right_orientation = this_cam_config['right_orientation'].replace(u'\xa0', u' ')
-            if isinstance(this_cam_config['left_orientation'], str):
-                self.left_orientation = this_cam_config['left_orientation'].replace(u'\xa0', u' ')
-        except:
-            self.log.error(f'read_configuration: {self.configuration_file} for camera {self.cam_num} encountered an issue accessing orientation.')
-            incomplete_reading = True
+        self.cam_config = configuration_pd.loc[configuration_pd['cam_id'] == self.cam_num].to_dict(orient = 'records')
 
         return not incomplete_reading
 
@@ -295,14 +309,15 @@ class image_capture:
 
         # construct new file name
         last_file_name = self.video_file_name
-        if self.cam_type == '511':
+        if self.conf_value('cam_type') == '511':
             cam_URL = f'https://www.quebec511.info/Carte/Fenetres/camera.ashx?id={self.cam_num}&format=mp4'
             self.video_file_name = f'{self.base_file_name}.mp4'
-        elif self.cam_type == 'vdm':
+        elif self.conf_value('cam_type') == 'vdm':
             cam_URL = f'https://ville.montreal.qc.ca/Circulation-Cameras/GEN{self.cam_num}.jpeg'
             self.video_file_name = f'{self.base_file_name}.jpeg'
         else:
-            self.log.error(f'acquire_camera_data: no URL for camera of type: ({self.cam_type})')
+            cam_type = self.conf_value('cam_type')
+            self.log.error(f'acquire_camera_data: no URL for camera of type: ({cam_type})')
 
         video_file_path = os.path.join(self.root_folder, self.input_folder, self.video_file_name)
         try:
@@ -355,31 +370,37 @@ class image_capture:
 
         self.image_file_names = []
 
-        cam = cv2.VideoCapture(full_video_file_name)
+        # if camera delivers mp4 video, extract frames:
+        if self.conf_value('cam_format') == 'mp4':
+            cam = cv2.VideoCapture(full_video_file_name)
 
-        currentframe = 0
-        while(True):
-            ret, frame = cam.read()
-            if ret:
-                frame_base_name = f'{self.base_file_name}_{currentframe}.jpg'
-                frame_file = os.path.join(self.root_folder, self.input_folder, frame_base_name)
-                if (currentframe % 90) == 0:
-                    cv2.imwrite(frame_file, frame)
-                    self.image_file_names.append(frame_base_name)
-                    #print('extract_frames: Written ' + frame_file)
-                currentframe += 1
-            else:
-                break
+            currentframe = 0
+            while(True):
+                ret, frame = cam.read()
+                if ret:
+                    frame_base_name = f'{self.base_file_name}_{currentframe}.jpg'
+                    frame_file = os.path.join(self.root_folder, self.input_folder, frame_base_name)
+                    if (currentframe % 90) == 0:
+                        cv2.imwrite(frame_file, frame)
+                        self.image_file_names.append(frame_base_name)
+                        self.log.debug('extract_frames: Written ' + frame_file)
+                    currentframe += 1
+                else:
+                    break
 
-        # release all memory from cv
-        cam.release()
-        cv2.destroyAllWindows()
+            # release all memory from cv
+            cam.release()
+            cv2.destroyAllWindows()
 
-    # todo: add classification fo type of train, detect motion direction
+        # otherwise (assume jpg images), use image file as-is:
+        else:
+            self.image_file_names.append(self.video_file_name)
+
+    # todo: add classification fo type of train
     def classify_nr(self):
 
-        if not self.nr_enable:
-            self.log.warning(f'classify_nr: skipping classification for {self.cam_num} because nr_enable = False')
+        if self.nr_disable:
+            self.log.warning(f'classify_nr: skipping classification for {self.cam_num} because nr_disable = True')
             return False
 
         for imgFile in self.image_file_names:
@@ -390,8 +411,8 @@ class image_capture:
                     img = tf.keras.utils.load_img(img_path, target_size=(256, 256)) #why was one model trained with size = 255?
                     img = tf.keras.utils.img_to_array(img)
                     img = np.expand_dims(img, axis=0)
-                except:
-                    self.log.error(f'classify_nr: could not open {imgFile}')
+                except Exception as ex:
+                    self.log.error(f'classify_nr: could not open {imgFile}: ' + str(ex))
                     pass
 
                 try:
@@ -408,8 +429,8 @@ class image_capture:
                     self.classified = True
                     self.log.info(f'classify_nr: {imgFile} is showing a train: {self.shows_train}, detection count: {self.detection_count}, threshold: {self.detection_threshold}; cnt: {self.cnt_pic}, train: {self.cnt_train}, no_train: {self.cnt_no_train}')
 
-                except:
-                    self.log.error(f'classify_nr: something went wrong processing {img_path}')
+                except Exception as ex:
+                    self.log.error(f'classify_nr: something went wrong processing {img_path}: ' + str(ex))
                     pass
             else:
                 self.classified = True
@@ -454,13 +475,16 @@ class image_capture:
         video = cv2.VideoCapture(video_file_path)
 
         # Read the mask
-        if self.mask:
+        use_mask = True
+        if self.conf_value('mask'):
             full_mask_file_name = os.path.join(self.root_folder, 'models\\masks', f'{self.cam_num}_mask.png')
             try:
                 mask = imutils.resize(cv2.imread(full_mask_file_name, 0), width = image_width)
             except:
                 self.log.error(f'detect_motion: failed to read mask {full_mask_file_name}.')
-                self.mask = False
+                use_mask = False
+        else:
+            use_mask = False
 
 
         while True:
@@ -478,7 +502,7 @@ class image_capture:
             curFrame = imutils.resize(curFrame, width = image_width) # not really necessary, but keep line when processing higher resolution
 
             # apply mask
-            if self.mask:
+            if use_mask:
                 try:
                     maskedImage = cv2.bitwise_and(curFrame, curFrame, mask = mask)
                 except:
@@ -513,9 +537,6 @@ class image_capture:
                 # and update the text
                 (x, y, w, h) = cv2.boundingRect(c)
                 cv2.rectangle(curFrame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-                # print box details
-                #print(f'Frame {frameNo} - BOX {x}, {y} dimension {w}, {h}')
 
                 # calculate box centers and draw circle
                 cx = int(x + w / 2)
@@ -579,13 +600,10 @@ class image_capture:
                 # check if object is already tracked, then only update second coordinates:
                 if objectId in trackedObjects.keys():
                     trackedObjects[objectId] = (trackedObjects[objectId][0], pt)
-                    #print(f'{objectId} already exists in list')
 
                 # if new, add to list
                 else:
                     trackedObjects[objectId] = (pt, pt)
-                    #if debug:
-                    #    print(f'added object id {objectId} to list')
 
         # calculate each objects absolute movement
         for key, currentObject in trackedObjects.items():
@@ -603,10 +621,10 @@ class image_capture:
 
         # store detected motion value
         self.motion_value = X
-        if X > self.motion_threshold:
+        if X > self.conf_value('motion_threshold'):
             self.motion_detected = True
             self.log.info(f'Objects on camera {self.cam_num} were mostly moving RIGHT')
-        elif X < -self.motion_threshold:
+        elif X < -self.conf_value('motion_threshold'):
             self.motion_detected = True
             self.log.info(f'Objects on camera {self.cam_num} were mostly moving LEFT')
         else:
@@ -633,56 +651,54 @@ class image_capture:
                 try:
                     for img_file in self.image_file_names:
                         os.remove(os.path.join(self.root_folder, self.input_folder, img_file))
-                except:
-                    self.log.error(f'archive_files: could not delete {img_file}')
+                except Exception as ex:
+                    self.log.error(f'archive_files: could not delete {img_file}: ' + str(ex))
             else:
                 try:
                     # move image files
                     for img_file in self.image_file_names:
                         shutil.move(os.path.join(self.root_folder, self.input_folder, img_file), self.output_folder_train)
                         pass
-                except:
-                    self.log.error(f'archive_files: could not move {img_file} to {self.output_folder_train}')
+                except Exception as ex:
+                    self.log.error(f'archive_files: could not move {img_file} to {self.output_folder_train}: ' + str(ex))
                     pass
 
             try:
                 shutil.move(os.path.join(self.root_folder, self.input_folder, self.video_file_name), self.output_folder_train)
-            except:
-                self.log.error(f'archive_files: could not move {self.video_file_name} to {self.output_folder_train}')
+            except Exception as ex:
+                self.log.error(f'archive_files: could not move {self.video_file_name} to {self.output_folder_train}: ' + str(ex))
 
         elif delete_no_train:
             try:
                 for img_file in self.image_file_names:
                     os.remove(os.path.join(self.root_folder, self.input_folder, img_file))
-            except:
-                self.log.error(f'archive_files: could not delete {img_file}')
+            except Exception as ex:
+                self.log.error(f'archive_files: could not delete {img_file}: ' + str(ex))
 
             try:
                 os.remove(os.path.join(self.root_folder, self.input_folder, self.video_file_name))
-            except:
-                self.log.error(f'archive_files: could not delete {self.video_file_name}')
+            except Exception as ex:
+                self.log.error(f'archive_files: could not delete {self.video_file_name}: ' + str(ex))
 
         else:
             if delete_jpg:
                 try:
                     for img_file in self.image_file_names:
                         os.remove(os.path.join(self.root_folder, self.input_folder, img_file))
-                except:
-                    self.log.error(f'archive_files: could not delete {img_file}')
+                except Exception as ex:
+                    self.log.error(f'archive_files: could not delete {img_file}: ' + str(ex))
             else:
                 try:
                     # move image files
                     for img_file in self.image_file_names:
                         shutil.move(os.path.join(self.root_folder, self.input_folder, img_file), self.output_folder_notrain)
-                        pass
-                except:
-                    self.log.error(f'archive_files: could not move {img_file} to {self.output_folder_train}')
-                    pass
+                except Exception as ex:
+                    self.log.error(f'archive_files: could not move {img_file} to {self.output_folder_notrain}: ' + str(ex))
 
             try:
                 shutil.move(os.path.join(self.root_folder, self.input_folder, self.video_file_name), self.output_folder_notrain)
-            except:
-                self.log.error(f'archive_files: could not move {self.video_file_name} to {self.output_folder_train}')
+            except Exception as ex:
+                self.log.error(f'archive_files: could not move {self.video_file_name} to {self.output_folder_notrain}: ' + str(ex))
 
         self.archived = True
         return True
@@ -699,13 +715,7 @@ class image_capture:
 
         data_file = os.path.join(self.root_folder, self.output_root_folder, 'train_sightings.csv')
 
-        # Construct message for posting
-        try:
-            cam_text = self.cam_description[str(self.cam_num)]
-        except:
-            cam_text = str(self.cam_num)
-
-        current_record = {'camera':[self.cam_num], 'description': [cam_text], 'train':[self.shows_train], 'date':[self.date], 'weekday':[self.week_day], 'time':[self.time], 'file name': [self.base_file_name]}
+        current_record = {'camera':[self.cam_num], 'description': [self.conf_value('cam_description')], 'train':[self.shows_train], 'date':[self.date], 'weekday':[self.week_day], 'time':[self.time], 'file name': [self.base_file_name]}
 
         df = pd.DataFrame(current_record)
 
@@ -723,30 +733,40 @@ class image_capture:
     # integrated function to process camera
     def process(self):
 
+        #0 - Reload configuration and re-load model if new version
+        self.read_configuration()
+
+        #0a - Load new model if different version obtained
+        if self.conf_value('nr_version') != self.loaded_nr_version:
+            self.nr_disable = False
+            self.load_model()
+
         #1 - Access camera data (download mp4 video to Inbox):
-        if not self.disable_capture:
+        if not self.conf_value('disable_capture'):
             self.acquire_camera_data(self.cam_num)
         else:
+            # quit function, nothing to do.
             return True
 
         if not self.new_data:
-            self.log.info(f'process: no new data from camera {self.cam_num}, skipping.')
+            self.log.debug(f'process: no new data from camera {self.cam_num}, skipping.')
+            # quit function, nothing to do.
             return False
 
         #2 - Extract still frame for neural network processing
-        if self.nr_enable:
+        if not self.nr_disable and self.conf_value('nr_enable'):
             self.extract_frames()
             self.classify_nr()
 
         #3 - Determine motion direction
-        if self.motion_enable:
+        if self.conf_value('motion_enable'):
             self.detect_motion()
 
         #3 - Move files to archive destination
-        delete_no_train = self.nr_enable and not self.nr_training # or something similar...
+        delete_no_train = self.conf_value('nr_enable') and not self.conf_value('nr_training') # or something similar...
         delete_jpg = False
 
-        if self.nr_enable or self.motion_enable:
+        if self.conf_value('nr_enable') or self.conf_value('motion_enable'):
             self.archive_files(delete_no_train, delete_jpg, ignore_threshold = True)
 
         #4 - Store record
@@ -755,7 +775,7 @@ class image_capture:
             self.store_record(ignore_threshold = False)
 
         #5 - Post on facebook
-            if self.fb_posting:
+            if self.conf_value('fb_posting'):
                 self.fb.publish_train(self, ignore_threshold = False)
 
         return True
@@ -788,18 +808,18 @@ class fb_helper:
 
             # Construct message for posting
             try:
-                cam_text = train.cam_description
+                cam_text = train.conf_value('cam_description')
             except:
                 cam_text = str(train.cam_num)
 
             motion_text = '(not moving)'
             if train.motion_detected:
                 if train.motion_value > 0:
-                    motion_text = 'heading ' + train.right_orientation
+                    motion_text = 'heading ' + train.conf_value('right_orientation')
                 else:
-                    motion_text = 'heading ' + train.left_orientation
+                    motion_text = 'heading ' + train.conf_value('left_orientation')
 
-            message_content = 'Train ' + motion_text + ' detected on camera ' + cam_text + ' [' + str(train.cam_num) + '] on ' + train.date + ' at ' + train.time + '.'
+            message_content = 'Train ' + motion_text + ' detected at ' + train.time + ' on camera ' + cam_text + ' [' + str(train.cam_num) + '] on ' + train.date + '.'
 
             # Publish image
 
@@ -817,10 +837,24 @@ class fb_helper:
 
         pass
 
-    def post_start(self):
+    def post_start(self, cam_list = []):
+
+        start_message = 'Train detection engine started :)'
+
         try:
-            self.page_graph.put_object('me', 'feed', message = 'Train detection engine started :)')
-            self.log.info('post_start: Posted detection started.')
+            if len(cam_list) > 0:
+                start_message += '\nCameras tracked:'
+                for cam in cam_list:
+                    if cam.conf_value('fb_posting'):
+                        nr_version = cam.conf_value('nr_version')
+                        cam_description = cam.conf_value('cam_description')
+                        start_message += f'\n {cam.cam_num} (v{nr_version}): {cam_description}'
+        except Exception as ex:
+            self.log.error('post_start: Could not read camera list information: ' + str(ex))
+
+        try:
+            self.page_graph.put_object('me', 'feed', message = start_message)
+            self.log.info(f'post_start: Posted detection started, posted message:\n {start_message}')
         except Exception as ex:
             self.log.error('post_start: posting failed: ' + str(ex))
 
@@ -836,7 +870,7 @@ def main():
 
     # setup logging
     log = logging.getLogger(__name__)
-    logging.basicConfig(level='INFO')
+    logging.basicConfig(level = 'INFO')
 
     # base configuration
     log.info('Starting TrainDetector.')
@@ -859,7 +893,8 @@ def main():
 
     # capture data
     log.info('Start capturing process.')
-    cam_list[0].fb.post_start()
+    cam_list[0].fb.post_start(cam_list)
+
     try:
         while(True):
             time.sleep(18)
