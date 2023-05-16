@@ -17,6 +17,7 @@ import pandas as pd
 from tensorflow.keras.models import load_model
 import json, facebook
 from facebook import GraphAPI
+#import sockets
 
 
 class image_capture:
@@ -29,12 +30,12 @@ class image_capture:
         # base parameters
         self.configuration_file = configuration_file
         self.fb_credential_file = fb_credential_file
+        self.fb_access_token = ''
         self.root_folder = root_folder
         self.base_file_name = ''
         self.image_file_names = []
         self.video_file_name = ''
         self.cam_num = cam_num
-        #self.cam_format = 'mp4'
         self.date = ''
         self.week_day = ''
         self.time = ''
@@ -44,17 +45,21 @@ class image_capture:
         self.last_data_checksum = 0x00
 
         # classification results
-        self.shows_train = False
-        self.motion_value = 0
-        self.motion_detected = False
-        self.classified = False
-        self.archived = False
-        self.detection_count = 0
-        self.detection_threshold = 1
-
-        self.cnt_pic = 0
-        self.cnt_train = 0
-        self.cnt_no_train = 0
+        self.result = {
+            'shows_train': False,
+            'motion_value': 0,
+            'motion_detected': False,
+            'classified': False,
+            'nr_confidence': 0,
+            'archived': False,
+            'detection_count': 0,
+            'detection_threshold': 1,
+            'cnt_pic': 0,
+            'cnt_train': 0,
+            'cnt_no_train': 0,
+            'caption': '',
+            'fb_url': ''
+        }
 
         # folder configuration
         #self.output_folder_train_template = 'media\\train\\{cam_num}\\{date_str}'
@@ -81,7 +86,8 @@ class image_capture:
         self.page_graph = False
         try:
             page_credentials = self.read_fb_creds(os.path.join(root_folder, self.fb_credential_file))
-            self.page_graph = GraphAPI(access_token = page_credentials['access_token'])
+            self.fb_access_token = page_credentials['access_token']
+            self.page_graph = GraphAPI(access_token = self.fb_access_token)
         except Exception as ex: # work on python 3.x
             self.log.error('image_capture (init): Could not load fb credentials: ' + str(ex))
 
@@ -95,7 +101,6 @@ class image_capture:
             self.set_input_folder()
             if cam_num > 0:
                 self.set_output_folder()
-                #self.acquire_camera_data(self.cam_num)
 
     def load_model(self):
         nr_version = self.conf_value('nr_version')
@@ -103,7 +108,7 @@ class image_capture:
 
         # Load model when configured version larger than previously loaded version
         if self.conf_value('nr_enable') and nr_version != self.loaded_nr_version:
-            self.log.info(f'load_model: Loading new model for self.cam_num; new version: {nr_version}, previous: {self.loaded_nr_version}')
+            self.log.info(f'load_model: Loading new model for camera {self.cam_num}; new version: {nr_version}, previous: {self.loaded_nr_version}')
             try:
                 model_version = int(nr_version)
                 model_file_name = os.path.join(self.root_folder, 'models\\neural networks', f'cam{self.cam_num}_model_v{model_version}.h5')
@@ -205,7 +210,7 @@ class image_capture:
 
         return True
 
-    # function to read individual configuration value
+    # function to access individual configuration value
     def conf_value(self, key):
 
         # initialise with FALSE
@@ -278,11 +283,11 @@ class image_capture:
     def acquire_camera_data(self, cam_num = 0):
 
         # initialize results
-        self.shows_train = False
-        self.motion_value = 0
-        self.motion_detected = False
-        self.classified = False
-        self.archived = False
+        self.result["shows_train"] = False
+        self.result["motion_value"] = 0
+        self.result["motion_detected"] = False
+        self.result["classified"] = False
+        self.result["archived"] = False
 
         # pre-checks
         if (cam_num == 0) and (self.cam_num == 0):
@@ -315,6 +320,9 @@ class image_capture:
         elif self.conf_value('cam_type') == 'vdm':
             cam_URL = f'https://ville.montreal.qc.ca/Circulation-Cameras/GEN{self.cam_num}.jpeg'
             self.video_file_name = f'{self.base_file_name}.jpeg'
+        elif self.conf_value('cam_type') == 'vdo':
+            cam_URL = f'https://traffic.ottawa.ca/beta/camera?id={self.cam_num}'
+            self.video_file_name = f'{self.base_file_name}.jpg'
         else:
             cam_type = self.conf_value('cam_type')
             self.log.error(f'acquire_camera_data: no URL for camera of type: ({cam_type})')
@@ -351,7 +359,7 @@ class image_capture:
 
         if self.new_data:
             self.last_data_checksum = new_checksum
-            self.cnt_pic += 1
+            self.result["cnt_pic"] += 1
             return True
         else:
             #restore last file name
@@ -403,40 +411,52 @@ class image_capture:
             self.log.warning(f'classify_nr: skipping classification for {self.cam_num} because nr_disable = True')
             return False
 
-        for imgFile in self.image_file_names:
-            if not self.shows_train:
-                try:
-                    # open image and pre-process for use with model
-                    img_path = os.path.join(self.root_folder, self.input_folder, imgFile)
-                    img = tf.keras.utils.load_img(img_path, target_size=(256, 256)) #why was one model trained with size = 255?
-                    img = tf.keras.utils.img_to_array(img)
-                    img = np.expand_dims(img, axis=0)
-                except Exception as ex:
-                    self.log.error(f'classify_nr: could not open {imgFile}: ' + str(ex))
-                    pass
+        self.result["shows_train"] = False
 
-                try:
-                    # use model to predict if this image contains a train
-                    if (self.nr_model.predict(img) > 0.5):
-                        self.shows_train = True
-                        self.cnt_train += 1
-                        self.detection_count += 1
+        try:
+            if len(self.image_file_names) > 0:
+                for imgFile in self.image_file_names:
+                    if not self.result["shows_train"]:
+                        try:
+                            # open image and pre-process for use with model
+                            img_path = os.path.join(self.root_folder, self.input_folder, imgFile)
+                            img = tf.keras.utils.load_img(img_path, target_size=(256, 256)) #why was one model trained with size = 255?
+                            img = tf.keras.utils.img_to_array(img)
+                            img = np.expand_dims(img, axis=0)
+                        except Exception as ex:
+                            self.log.error(f'classify_nr: could not open {imgFile}: ' + str(ex))
+                            pass
+
+                        try:
+                            # use model to predict if this image contains a train
+                            self.result["nr_confidence"] = self.nr_model.predict(img)[0][0]
+
+                            # If confidence is more than 0.5, probably found a train:
+                            if (self.result["nr_confidence"] > 0.5):
+                                # set result to "train":
+                                self.result["shows_train"] = True
+                                self.result["cnt_train"] += 1
+                                self.result["detection_count"] += 1
+                            else:
+                                # set result to "no train":
+                                self.result["shows_train"] = False
+                                self.result["cnt_no_train"] += 1
+                                self.result["detection_count"] = 0
+
+                            self.result["classified"] = True
+                            self.log.info(f'classify_nr: {imgFile} is showing a train: {self.result["nr_confidence"]} => {self.result["shows_train"]}, detection count: {self.result["detection_count"]}, threshold: {self.result["detection_threshold"]}; cnt: {self.result["cnt_pic"]}, train: {self.result["cnt_train"]}, no_train: {self.result["cnt_no_train"]}')
+
+                        except Exception as ex:
+                            self.log.error(f'classify_nr: something went wrong processing {img_path}: ' + str(ex))
+                            pass
                     else:
-                        self.shows_train = False
-                        self.cnt_no_train += 1
-                        self.detection_count = 0
+                        self.result["classified"] = True
+                        self.log.warning(f'classify: skipping {imgFile}, train already detected.')
 
-                    self.classified = True
-                    self.log.info(f'classify_nr: {imgFile} is showing a train: {self.shows_train}, detection count: {self.detection_count}, threshold: {self.detection_threshold}; cnt: {self.cnt_pic}, train: {self.cnt_train}, no_train: {self.cnt_no_train}')
+        except Exception as ex:
+            self.log.error('classify_nr: ran into a problem: ', str(ex))
 
-                except Exception as ex:
-                    self.log.error(f'classify_nr: something went wrong processing {img_path}: ' + str(ex))
-                    pass
-            else:
-                self.classified = True
-                self.log.warning(f'classify: skipping {imgFile}, train already detected.')
-
-        return self.shows_train
+        return self.result["shows_train"]
 
     def detect_motion(self):
 
@@ -468,7 +488,7 @@ class image_capture:
         trackedObjects = {}
         trackedObjectHistory = []
         trackId = 0
-        self.motion_detected = False
+        self.result["motion_detected"] = False
 
         # Read video from file
         video_file_path = os.path.join(self.root_folder, self.input_folder, self.video_file_name)
@@ -502,11 +522,11 @@ class image_capture:
             curFrame = imutils.resize(curFrame, width = image_width) # not really necessary, but keep line when processing higher resolution
 
             # apply mask
+            maskedImage = curFrame
             if use_mask:
                 try:
                     maskedImage = cv2.bitwise_and(curFrame, curFrame, mask = mask)
                 except:
-                    maskedImage = curFrame
                     pass
 
             # convert it to grayscale, and blur it to remove noise (radius 21 px)
@@ -620,18 +640,59 @@ class image_capture:
             Y += currentObject[2][1]
 
         # store detected motion value
-        self.motion_value = X
+        self.result["motion_value"] = X
         if X > self.conf_value('motion_threshold'):
-            self.motion_detected = True
+            self.result["motion_detected"] = True
             self.log.info(f'Objects on camera {self.cam_num} were mostly moving RIGHT')
         elif X < -self.conf_value('motion_threshold'):
-            self.motion_detected = True
+            self.result["motion_detected"] = True
             self.log.info(f'Objects on camera {self.cam_num} were mostly moving LEFT')
         else:
             self.log.info(f'NO MOTION was detected on camera {self.cam_num}.')
 
+
+        # Code below should be in separate function, re-use from
+        if self.result["motion_detected"] and self.conf_value('det_motion_only'):
+            self.result["shows_train"] = True
+            self.result["cnt_train"] += 1
+            self.result["detection_count"] += 1
+            self.log.info(f'{self.cam_num} shows movement and is configured to recognize train without NR.')
+            self.log.info(f'classify_nr: {self.cam_num} is showing a train: {self.result["shows_train"]}, detection count: {self.result["detection_count"]}, threshold: {self.result["detection_threshold"]}; cnt: {self.result["cnt_pic"]}, train: {self.result["cnt_train"]}, no_train: {self.result["cnt_no_train"]}')
+
+        elif self.conf_value('det_motion_only'):
+            self.result["shows_train"] = False
+            self.result["cnt_no_train"] += 1
+            self.result["detection_count"] = 0
+
         return True
 
+    # function to generate image caption
+    def generate_caption(self):
+
+        # Construct message for posting
+        try:
+            cam_text = self.conf_value('cam_description')
+        except:
+            cam_text = str(self.cam_num)
+
+        motion_text= ''
+        if self.conf_value('motion_enable'):
+            motion_text = '(no motion detected)'
+
+        if self.result["motion_detected"]:
+            if self.result["motion_value"] > 0:
+                motion_text = 'heading ' + self.conf_value('right_orientation')
+            else:
+                motion_text = 'heading ' + self.conf_value('left_orientation')
+
+        caption = 'Train ' + motion_text + ' detected at ' + self.time + ' on camera ' + cam_text + ' [' + str(self.cam_num) + '] on ' + self.date + '.'
+
+        self.result["caption"] = caption
+
+        return caption
+
+
+    # function to archive current record
     def archive_files(self, delete_no_train = True, delete_jpg = False, ignore_threshold = False):
 
         if self.output_folder_notrain == '':
@@ -645,7 +706,7 @@ class image_capture:
         self.set_output_folder()
 
         # Image shows a train, so move it to the right folder
-        if self.shows_train and ((self.detection_count <= self.detection_threshold) or ignore_threshold):
+        if self.result["shows_train"] and ((self.result["detection_count"] <= self.result["detection_threshold"]) or ignore_threshold):
 
             if delete_jpg:
                 try:
@@ -700,7 +761,7 @@ class image_capture:
             except Exception as ex:
                 self.log.error(f'archive_files: could not move {self.video_file_name} to {self.output_folder_notrain}: ' + str(ex))
 
-        self.archived = True
+        self.result["archived"] = True
         return True
 
     def delete_files(self):
@@ -715,9 +776,10 @@ class image_capture:
 
         data_file = os.path.join(self.root_folder, self.output_root_folder, 'train_sightings.csv')
 
-        current_record = {'camera':[self.cam_num], 'description': [self.conf_value('cam_description')], 'train':[self.shows_train], 'date':[self.date], 'weekday':[self.week_day], 'time':[self.time], 'file name': [self.base_file_name]}
+        # extend to store complete results
+        current_record = {'camera': [self.cam_num], 'date': [self.date], 'weekday': [self.week_day], 'time': [self.time], 'file name': [self.base_file_name]}
 
-        df = pd.DataFrame(current_record)
+        df = pd.DataFrame(current_record | self.result)
 
         # check if output file exists, if yes - append, if no - create new
         try:
@@ -753,9 +815,11 @@ class image_capture:
             # quit function, nothing to do.
             return False
 
-        #2 - Extract still frame for neural network processing
+        #2a - Extract still frame (always do, so that collected data can be used for training)
+        self.extract_frames()
+
+        #2b - Extract still frame
         if not self.nr_disable and self.conf_value('nr_enable'):
-            self.extract_frames()
             self.classify_nr()
 
         #3 - Determine motion direction
@@ -766,12 +830,14 @@ class image_capture:
         delete_no_train = self.conf_value('nr_enable') and not self.conf_value('nr_training') # or something similar...
         delete_jpg = False
 
+        self.generate_caption()
+
         if self.conf_value('nr_enable') or self.conf_value('motion_enable'):
             self.archive_files(delete_no_train, delete_jpg, ignore_threshold = True)
 
         #4 - Store record
-        if self.shows_train or self.motion_detected:
-            # keep record if a train was detected by the nr model
+        if self.result["shows_train"]:
+            # keep record if a train was detected by the nr model or by motion detection
             self.store_record(ignore_threshold = False)
 
         #5 - Post on facebook
@@ -796,36 +862,75 @@ class fb_helper:
             self.log.error('publish_train: no page graph provided.')
             return False
 
-        if (train.detection_count <= train.detection_threshold) or ignore_threshold:
-            # Open image file to be posted
-            if train.archived and train.shows_train:
-                image_location = os.path.join(train.root_folder, train.output_folder_train, train.image_file_names[0])
-            elif train.classified and train.shows_train:
-                image_location = os.path.join(train.root_folder, train.input_folder, train.image_file_names[0])
+        if not train.result["shows_train"]:
+            self.log.warning('publish_train: does not show train, so not posting it.')
+            return False
+
+        if len(train.image_file_names) == 0:
+            self.log.error(f'publish_train: cannot post image for camera {train.cam_num} because image_file_names is empty.')
+
+        # initialize return
+        ret = False
+
+        # determine if we should post at all
+        if (train.result["detection_count"] <= train.result["detection_threshold"]) or ignore_threshold:
+
+            # if cam_type is "511", we should have a
+            if train.video_file_name[-3:] == 'mp4':
+                post_video = True
             else:
-                self.log.warning('publish_train: does not show train, so not posting it.')
+                post_video = False
+
+            # determine which file to use for posting
+            if post_video:
+                image_file_name = train.video_file_name
+            else:
+                image_file_name = train.image_file_names[0]
+
+            # determine path to image file to be posted
+            if train.result["archived"]:
+                image_location = os.path.join(train.root_folder, train.output_folder_train, image_file_name)
+            elif train.result["classified"]:
+                image_location = os.path.join(train.root_folder, train.input_folder, image_file_name)
+            else:
+                self.log.warning(f'publish_train: image {image_file_name} is neither classified nor archived, so cannot post it.')
                 return False
 
             # Construct message for posting
-            try:
-                cam_text = train.conf_value('cam_description')
-            except:
-                cam_text = str(train.cam_num)
+            message_content = train.result["caption"]
 
-            motion_text = '(not moving)'
-            if train.motion_detected:
-                if train.motion_value > 0:
-                    motion_text = 'heading ' + train.conf_value('right_orientation')
-                else:
-                    motion_text = 'heading ' + train.conf_value('left_orientation')
-
-            message_content = 'Train ' + motion_text + ' detected at ' + train.time + ' on camera ' + cam_text + ' [' + str(train.cam_num) + '] on ' + train.date + '.'
-
-            # Publish image
-
+            # Publish image or video
             try:
                 self.log.info('publish_train: trying to publish ' + image_location + ' with message ' + message_content)
-                ret = self.page_graph.put_photo(open(image_location, "rb"), message = message_content)
+
+                # determine to post photo or video
+                if post_video:
+                    # publish video
+                    # Construct the Graph API endpoint URL for video uploads
+                    endpoint_url = f"https://graph.facebook.com/v12.0/me/videos?access_token={train.fb_access_token}"
+                    # Open the video file in binary mode
+                    with open(image_location, 'rb') as video_file:
+                        # Create a POST request with the video file
+                        response = requests.post(endpoint_url, files={'source': video_file}, data={'description': message_content})
+
+                    # Access the video ID from the response
+                    ret = response.json()
+                    video_id = ret['id']
+
+                    #video_url = f"https://www.facebook.com/video.php?fbid={video_id}"
+                    video_url = f"https://www.facebook.com/AutomatedTrainSightings/videos/{video_id}"
+                    train.result['fb_url'] = video_url
+
+                    self.log.info(f'publish_train: posted video to {video_url}')
+                else:
+                    # publish photo
+                    ret = self.page_graph.put_photo(open(image_location, "rb"), message = message_content)
+
+                    photo_id = ret['id']
+                    photo_url = f"https://www.facebook.com/photo.php?fbid={photo_id}"
+                    train.result['fb_url'] = photo_url
+
+                    self.log.info(f'publish_train: posted photo to {photo_url}')
             except Exception as ex:
                 self.log.error('publish_train: posting failed: ' + str(ex))
                 ret = False
@@ -834,8 +939,6 @@ class fb_helper:
             ret = False
 
         return ret
-
-        pass
 
     def post_start(self, cam_list = []):
 
@@ -865,6 +968,42 @@ class fb_helper:
         except Exception as ex:
             self.log.error('post_end: posting failed: ' + str(ex))
 
+"""
+class td_manager_connection:
+    def __init__(self):
+
+        self.log = logging.getLogger(__name__)
+
+        # Create a socket object
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        # Define the host and port to listen on
+        host = '127.0.0.1'  # localhost
+        port = 7429
+
+        # Bind the socket to the host and port
+        server_socket.bind((host, port))
+
+        # Listen for incoming connections
+        server_socket.listen(1)
+
+        # Accept a client connection
+        self.client_socket, self.client_address = server_socket.accept()
+        self.log.info('Connected by', self.client_address)
+
+        return True
+
+    # Function to handle receiving data from the client
+    def receive_data(self):
+        # Receive data from the client
+        self.data = self.client_socket.recv(1024).decode()
+        if not self.data:
+            return False
+
+        self.log.info(f"received: {self.data}")
+
+        return self.data
+"""
 
 def main():
 
@@ -893,7 +1032,7 @@ def main():
 
     # capture data
     log.info('Start capturing process.')
-    cam_list[0].fb.post_start(cam_list)
+    #cam_list[0].fb.post_start(cam_list)
 
     try:
         while(True):
@@ -904,7 +1043,7 @@ def main():
         pass
 
     log.info('Terminating capturing process.')
-    cam_list[0].fb.post_end()
+    #cam_list[0].fb.post_end()
 
 if __name__ == '__main__':
     main()
