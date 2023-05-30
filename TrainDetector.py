@@ -19,6 +19,7 @@ import json
 from facebook import GraphAPI
 import sys
 import sqlite3
+from google.transit import gtfs_realtime_pb2
 
 
 class image_capture:
@@ -45,6 +46,7 @@ class image_capture:
         self.last_data_checksum = 0x00
 
         # classification results
+        self.nearby_trains = []
         self.record = {
             'camera': self.cam_num,
             'date': '',
@@ -301,6 +303,7 @@ class image_capture:
         self.record["fb_url"] = ''
         self.record["direction"] = ''
         self.record["file_name"] = ''
+        self.nearby_trains = []
 
         # pre-checks
         if (cam_num == 0) and (self.cam_num == 0):
@@ -390,7 +393,10 @@ class image_capture:
             self.file_name = last_file_name
 
             # delete new file (because its content is identical yo the last file
-            os.remove(input_file_path)
+            try:
+                os.remove(input_file_path)
+            except Exception as ex:
+                self.log.error('acquire_camera_data: ' + str(ex))
 
         # update record with file path
         self.record["file_path"] = self.input_folder
@@ -701,6 +707,216 @@ class image_capture:
 
         return True
 
+    def calculate_distance(self, lat1, lon1, lat2, lon2):
+        """
+        Calculate the distance between two GPS coordinates using the Haversine formula.
+        Args:
+            lat1 (float): Latitude of the first coordinate.
+            lon1 (float): Longitude of the first coordinate.
+            lat2 (float): Latitude of the second coordinate.
+            lon2 (float): Longitude of the second coordinate.
+        Returns:
+            float: Distance between the two coordinates in meters.
+        """
+        # Convert latitude and longitude to radians
+        lat1_rad = math.radians(lat1)
+        lon1_rad = math.radians(lon1)
+        lat2_rad = math.radians(lat2)
+        lon2_rad = math.radians(lon2)
+
+        # Radius of the Earth in meters
+        earth_radius = 6371000
+
+        # Haversine formula
+        dlat = lat2_rad - lat1_rad
+        dlon = lon2_rad - lon1_rad
+        a = math.sin(dlat / 2) ** 2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        distance = earth_radius * c
+
+        return distance
+
+    # funtion to determine closest VIA train to camera location
+    def find_closest_train(self):
+
+        # initialize empty train list
+        nearby_trains = []
+        rejected_trains = []
+
+        # distance limit
+        dst_lim = 800
+
+        #2 get camera coordinates
+        lon = self.conf_value('longitude')
+        lat = self.conf_value('latitude')
+
+        if (lon == 0) or (lat == 0):
+            self.log.debug(f'find_closest_train: skipping, location of camera {self.cam_num} is not set.')
+            return []
+        else:
+            self.log.debug(f'find_closest_train: comparing train positions with camera location {lat}, {lon}.')
+
+        try:
+            # read exo credentials from external file (todo: could make file name configurable...)
+            exo_cred_file = os.path.join(self.root_folder, 'exo_credentials.txt')
+            exo_creds = ''
+            try:
+                with open(exo_cred_file, 'r') as f:
+                    exo_creds = str(f.read()).strip()
+            except Exception as ex:
+                self.log.error('find_closest_train: trying to read exo credentials: ' + str(ex))
+
+            #1 get VIA feed
+            via_feed_url = 'https://asm-backend.transitdocs.com/gtfs/via'
+            response = requests.get(via_feed_url)
+            if response.status_code == 200:
+                via_feed = gtfs_realtime_pb2.FeedMessage()
+                via_feed.ParseFromString(response.content)
+            else:
+                self.log.error('find_closest_train: could not access VIA GTFS feed, error code: ' + str(response.status_code))
+                via_feed = False
+
+            #1b read VIA trips
+            try:
+                via_trips = pd.read_csv(os.path.join(self.root_folder, 'models', 'gtfs', 'viarail', 'trips.txt'))
+            except Exception as ex:
+                self.log.error('find_closest_train: could not real VIA trips data: ' + str(ex))
+                via_trips = False
+
+            # get EXO trains (move token to separate file
+            exo_trips_url = f'https://opendata.exo.quebec/ServiceGTFSR/TripUpdate.pb?token={exo_creds}&agency=TRAINS'
+            exo_vehicle_url = f'https://opendata.exo.quebec/ServiceGTFSR/VehiclePosition.pb?token={exo_creds}&agency=TRAINS'
+
+            # EXO has vehicles and trips separately
+            try:
+                exo_trips = pd.read_csv(os.path.join(self.root_folder, 'models', 'gtfs', 'exo', 'trips.txt'))
+                exo_routes = pd.read_csv(os.path.join(self.root_folder, 'models', 'gtfs', 'exo', 'routes.txt'))
+            except Exception as ex:
+                exo_trips = False
+                exo_routes = False
+                self.log.error('find_closest_train: ' + str(ex))
+
+            response = requests.get(exo_vehicle_url)
+            if response.status_code == 200:
+                exo_vehicles = gtfs_realtime_pb2.FeedMessage()
+                exo_vehicles.ParseFromString(response.content)
+            else:
+                self.log.error('find_closest_train: could not access EXO GTFS feed, error code: ' + str(response.status_code))
+                exo_vehicles = False
+
+            #3 loop through all trains and determine distance
+
+            # check for VIA trains:
+            if not via_feed:
+                pass
+            else:
+                for via_train in via_feed.entity:
+
+                    if via_train.HasField('vehicle'):
+                        vehicle = via_train.vehicle
+
+                        # time delta -- add later:
+                        #datetime.fromtimestamp(vehicle.timestamp) - datetime.now()
+
+                        # distance:
+                        dst = self.calculate_distance(lat, lon, vehicle.position.latitude, vehicle.position.longitude)
+
+                        # get destination from trips table
+                        train_str = ''
+                        try:
+                            condition = (via_trips['trip_id'] == int(vehicle.trip.trip_id)) & (via_trips['route_id'] == vehicle.trip.route_id)
+                            train_no = via_trips.loc[condition, 'trip_short_name'].values[0]
+                            train_destination = via_trips.loc[condition, 'trip_headsign'].values[0]
+                            dst_str = str(round(dst)) # distance in m
+
+                            try:
+                                asm_url = f'https://asm.transitdocs.com/train/{vehicle.trip.start_date[0:4]}/{vehicle.trip.start_date[4:6]}/{vehicle.trip.start_date[6:8]}/V/{vehicle.vehicle.id[15:]}'
+                            except:
+                                asm_url = ''
+
+                            train_str = f'VIA {train_no}, destination: {train_destination}'
+                            if len(asm_url) > 0:
+                                train_str += f', details: {asm_url}'
+
+                            self.log.debug(f'find_closest_train: Train No: {train_no} Destination: {train_destination}, distance: {dst} m')
+                        except:
+                            train_str = vehicle.vehicle.id
+
+                        if dst < dst_lim:
+                            nearby_trains.append(train_str)
+                        else:
+                            rejected_trains.append(train_str)
+
+            # check for EXO trains:
+            if not exo_vehicles:
+                pass
+            else:
+                # now go through vehicles for location and assign train numbers from trips
+                for exo_vehicle in exo_vehicles.entity:
+
+                    if exo_vehicle.HasField('vehicle'):
+                        vehicle = exo_vehicle.vehicle
+
+                        # time delta -- add later:
+                        #datetime.fromtimestamp(vehicle.timestamp) - datetime.now()
+
+                        # distance:
+                        dst = self.calculate_distance(lat, lon, vehicle.position.latitude, vehicle.position.longitude)
+
+                        # get train details
+                        train_str = ''
+
+                        # get train number/id
+                        exo_train_id = '(no assignment)'
+                        exo_destination = ''
+                        exo_route_name = ''
+
+                        # resolve train no. from trips table
+                        try:
+                            condition = (exo_trips['trip_id'] == vehicle.trip.trip_id)
+                            exo_train_id = str(exo_trips.loc[condition, 'trip_short_name'].values[0])
+                            exo_destination = exo_trips.loc[condition, 'trip_headsign'].values[0]
+                        except:
+                            self.log.error('find_closest_train: ' + str(ex))
+
+                        # resolve route name from routes table
+                        try:
+                            # because trip_id is numeric, pandas stores it as integer
+                            condition = (exo_routes['route_id'] == int(vehicle.trip.route_id))
+                            exo_route_name = exo_routes.loc[condition, 'route_long_name'].values[0]
+                        except:
+                            self.log.error('find_closest_train: ' + str(ex))
+
+
+                        # assign vehicle id and route number
+                        try:
+                            vehicle_id = vehicle.vehicle.id
+                            #route_id = vehicle.trip.route_id
+                            dst_str = str(round(dst)) # distance in m
+
+                            train_str = f'EXO {vehicle_id} on train EXO {exo_train_id}, route: {exo_route_name}, destination: {exo_destination}'
+
+                            self.log.debug(f'find_closest_train: Vehicle: {vehicle_id}, Train: {exo_train_id}, Route: {exo_route_name}, distance: {dst} m')
+                        except:
+                            train_str = vehicle.vehicle.id
+
+                        # check distance limit
+                        if dst < dst_lim:
+                            nearby_trains.append(train_str)
+                        else:
+                            rejected_trains.append(train_str)
+
+            # log results
+            self.log.info('find_closest_train: accepted trains: ' + str(nearby_trains))
+            self.log.debug('find_closest_train: rejected trains: ' + str(rejected_trains))
+
+        except Exception as ex:
+            self.log.error('find_closest_train: error: ' + str(ex))
+
+        self.nearby_trains = nearby_trains
+        return nearby_trains
+
+
     # function to generate image caption
     def generate_caption(self):
 
@@ -721,6 +937,16 @@ class image_capture:
                 motion_text = 'heading ' + self.conf_value('left_orientation')
 
         caption = 'Train ' + motion_text + ' detected at ' + self.record["time"] + ' on camera ' + cam_text + ' [' + str(self.cam_num) + '] on ' + self.record["date"] + '.'
+
+        # NEW: try to find matching trains
+        try:
+            possible_trains = self.find_closest_train()
+            if len(possible_trains) > 0:
+                caption += ' Train on picture is: ' + ' or '.join(possible_trains)
+                pass
+        except Exception as ex:
+            self.log.error('generate_caption: ' + str(ex))
+            pass
 
         self.record["caption"] = caption
 
@@ -908,9 +1134,12 @@ class image_capture:
 
         # Store record
         if self.record["shows_train"]:
-            #5 - Post on facebook (need to to *before* storing record)
+            #5 - Post on facebook (need to do *before* storing record, to capture fb id)
             if self.conf_value('fb_posting'):
-                self.fb.publish_train(self, ignore_threshold = False)
+                # ignore threshold when VIA/EXO train is nearby:  === does not work well on Ottawa cameras with lots of captures per train passing, will create multiple postings, need to find different approach
+                #ignore_threshold = (len(self.nearby_trains) > 0)
+                ignore_threshold = False
+                self.fb.publish_train(self, ignore_threshold)
 
             #6 keep record if a train was detected by the nr model or by motion detection
             self.store_record(ignore_threshold = False, to_csv = True, to_db = True)
@@ -1145,14 +1374,21 @@ def main():
 
     # Read configuration and determine cameras
     log.info('Reading configuration file.')
-    configuration = pd.read_csv(os.path.join(root_folder, configuration_file), encoding = "ISO-8859-1")
+    try:
+        configuration = pd.read_csv(os.path.join(root_folder, configuration_file), encoding = "ISO-8859-1")
+    except Exception as ex:
+        log.error(f'Error reading configuration {configuration_file}: ' + str(ex))
+
     log.info(f'Loaded data for {len(configuration)} cameras.')
 
     # construct camera list
     log.info('Initializing cameras.')
     cam_list = []
-    for cam_id in configuration['cam_id']:
-        cam_list.append(image_capture(root_folder = root_folder, input_root_folder = 'inbox', output_root_folder = 'results', cam_num = cam_id, configuration_file = configuration_file, fb_credential_file = fb_credential_file, db_file = database_file))
+    try:
+        for cam_id in configuration['cam_id']:
+            cam_list.append(image_capture(root_folder = root_folder, input_root_folder = 'inbox', output_root_folder = 'results', cam_num = cam_id, configuration_file = configuration_file, fb_credential_file = fb_credential_file, db_file = database_file))
+    except Exception as ex:
+        log.error(f'Error setting up image captures: ' + str(ex))
 
     # capture data
     log.info('Start capturing process.')
@@ -1162,7 +1398,10 @@ def main():
         while(True):
             time.sleep(18)
             for cam in cam_list:
-                cam.process()
+                try:
+                    cam.process()
+                except Exception as ex:
+                    log.error(f'Error processing camera: {cam.cam_num}' + str(ex))
 
                 #monitor memory usage
                 log.debug(f'Object for cam {cam.cam_num} uses {sys.getsizeof(cam)} bytes of memory.')
