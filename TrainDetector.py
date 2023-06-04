@@ -83,6 +83,8 @@ class image_capture:
 
         # configuration (to be read from configuration file)
         self.cam_config = {}
+        self.train_location_timeout = 150
+        self.train_location_distance = 850
 
         self.nr_disable = False  # keep in case model cannot be loaded
         self.loaded_nr_version = -1   # keep to identify if new version specified
@@ -360,9 +362,9 @@ class image_capture:
             video_file = open(input_file_path, 'wb')
 
             # access video stream
-            response = requests.get(cam_URL, stream=True)
-        except:
-            self.log.error(f'acquire_camera_data: something went wrong downloading data from {cam_URL}')
+            response = requests.get(cam_URL, stream = True, verify = False)
+        except Exception as ex:
+            self.log.error(f'acquire_camera_data: something went wrong downloading data from {cam_URL}: ' + str(ex))
             return False
 
         # save video file
@@ -736,27 +738,140 @@ class image_capture:
 
         return distance
 
-    # funtion to determine closest VIA train to camera location
-    def find_closest_train(self):
+    # function to get trains from operator
+    def get_trains(self, agency_feed = False, agency_name = ''):
 
         # initialize empty train list
         nearby_trains = []
         rejected_trains = []
 
-        # distance limit
-        dst_lim = 800
+        # Check for valif agency
+        agencies = ['VIA', 'exo']
+
+        if not agency_feed or not (agency_name in agencies):
+            log.error(f'get_trains: no agency feed or unknown agency name: {agency_name}')
+            return nearby_trains
 
         #2 get camera coordinates
         lon = self.conf_value('longitude')
         lat = self.conf_value('latitude')
 
         if (lon == 0) or (lat == 0):
-            self.log.debug(f'find_closest_train: skipping, location of camera {self.cam_num} is not set.')
-            return []
+            self.log.debug(f'get_trains: skipping, location of camera {self.cam_num} is not set.')
+            return nearby_trains
         else:
-            self.log.debug(f'find_closest_train: comparing train positions with camera location {lat}, {lon}.')
+            self.log.debug(f'get_trains: comparing train positions with camera location {lat}, {lon}.')
+
+        # Read trips and routes from static GTFS
+        try:
+            if agency_name == 'VIA':
+                trips = pd.read_csv(os.path.join(self.root_folder, 'models', 'gtfs', 'viarail', 'trips.txt'))
+                routes = pd.read_csv(os.path.join(self.root_folder, 'models', 'gtfs', 'viarail', 'routes.txt'))
+
+            elif agency_name == 'exo':
+                trips = pd.read_csv(os.path.join(self.root_folder, 'models', 'gtfs', 'exo', 'trips.txt'))
+                routes = pd.read_csv(os.path.join(self.root_folder, 'models', 'gtfs', 'exo', 'routes.txt'))
+
+        except Exception as ex:
+            trips = False
+            routes = False
+            self.log.error('get_trains: ' + str(ex))
+
+        # loop through trains:
+        for train in agency_feed.entity:
+
+            if train.HasField('vehicle'):
+                vehicle = train.vehicle
+
+                # age of record
+                timedelta = datetime.now() - datetime.fromtimestamp(vehicle.timestamp)
+
+                # distance:
+                dst = self.calculate_distance(lat, lon, vehicle.position.latitude, vehicle.position.longitude)
+                dst_str = str(round(dst)) # distance in m
+
+                # initialize result string
+                train_str = ''
+                train_no = ''
+                train_destination = ''
+                route_name = ''
+
+                # resolve train no. from trips table
+                try:
+                    # because route_id is numeric, pandas stores it as integer
+                    try:
+                        trip_id = int(vehicle.trip.trip_id)
+                    except:
+                        trip_id = vehicle.trip.trip_id
+
+                    condition = (trips['trip_id'] == trip_id)
+
+                    train_no_list = trips.loc[condition, 'trip_short_name'].values
+                    if len(train_no_list) > 0:
+                        train_no = str(train_no_list[0])
+
+                    train_destination_list = trips.loc[condition, 'trip_headsign'].values
+                    if len(train_destination_list) > 0:
+                        train_destination = train_destination_list[0]
+
+                except Exception as ex:
+                    self.log.error('get_trains: ' + str(ex))
+
+                # resolve route name from routes table
+                try:
+                    # because route_id is numeric, pandas stores it as integer
+                    try:
+                        route_id = int(vehicle.trip.route_id)
+                    except:
+                        route_id = vehicle.trip.route_id
+
+                    condition = (routes['route_id'] == route_id)
+                    route_name_list = routes.loc[condition, 'route_long_name'].values
+                    if len(route_name_list) > 0:
+                        route_name = route_name_list[0]
+
+                except Exception as ex:
+                    self.log.error('get_trains: ' + str(ex))
+
+
+                # assign vehicle id and route number
+                try:
+                    if agency_name == 'VIA':
+                        try:
+                            asm_url = f'https://asm.transitdocs.com/train/{vehicle.trip.start_date[0:4]}/{vehicle.trip.start_date[4:6]}/{vehicle.trip.start_date[6:8]}/V/{vehicle.vehicle.id[15:]}'
+                        except:
+                            asm_url = ''
+                    else:
+                        asm_url = ''
+
+                    if agency_name == 'exo':
+                        vehicle_id = vehicle.vehicle.id
+                        train_str = f'EXO {vehicle_id} on '
+
+                    # build train string
+                    train_str += f'{agency_name} {train_no}, route: {route_name}, destination: {train_destination}'
+                    if (len(asm_url) > 0) and agency_name == 'VIA':
+                        train_str += f', details: {asm_url}'
+
+                    # log
+                    self.log.debug(f'get_trains: found train {train_str}, at distance: {dst_str} m, age: {timedelta}')
+                except Exception as ex:
+                    self.log.error(f'get_trains: ' + str(ex))
+                    train_str = vehicle.vehicle.id
+
+                # check distance and time limit
+                if (dst <= self.train_location_distance) and (timedelta.seconds <= self.train_location_timeout):
+                    nearby_trains.append(train_str)
+                else:
+                    rejected_trains.append(train_str)
+
+        return nearby_trains
+
+    # funtion to determine closest VIA train to camera location
+    def find_closest_train(self):
 
         try:
+            #1a get EXO feed
             # read exo credentials from external file (todo: could make file name configurable...)
             exo_cred_file = os.path.join(self.root_folder, 'exo_credentials.txt')
             exo_creds = ''
@@ -766,7 +881,17 @@ class image_capture:
             except Exception as ex:
                 self.log.error('find_closest_train: trying to read exo credentials: ' + str(ex))
 
-            #1 get VIA feed
+            exo_vehicle_url = f'https://opendata.exo.quebec/ServiceGTFSR/VehiclePosition.pb?token={exo_creds}&agency=TRAINS'
+
+            response = requests.get(exo_vehicle_url)
+            if response.status_code == 200:
+                exo_feed = gtfs_realtime_pb2.FeedMessage()
+                exo_feed.ParseFromString(response.content)
+            else:
+                self.log.error('find_closest_train: could not access EXO GTFS feed, error code: ' + str(response.status_code))
+                exo_feed = False
+
+            #1b get VIA feed
             via_feed_url = 'https://asm-backend.transitdocs.com/gtfs/via'
             response = requests.get(via_feed_url)
             if response.status_code == 200:
@@ -776,145 +901,31 @@ class image_capture:
                 self.log.error('find_closest_train: could not access VIA GTFS feed, error code: ' + str(response.status_code))
                 via_feed = False
 
-            #1b read VIA trips
-            try:
-                via_trips = pd.read_csv(os.path.join(self.root_folder, 'models', 'gtfs', 'viarail', 'trips.txt'))
-            except Exception as ex:
-                self.log.error('find_closest_train: could not real VIA trips data: ' + str(ex))
-                via_trips = False
-
-            # get EXO trains (move token to separate file
-            exo_trips_url = f'https://opendata.exo.quebec/ServiceGTFSR/TripUpdate.pb?token={exo_creds}&agency=TRAINS'
-            exo_vehicle_url = f'https://opendata.exo.quebec/ServiceGTFSR/VehiclePosition.pb?token={exo_creds}&agency=TRAINS'
-
-            # EXO has vehicles and trips separately
-            try:
-                exo_trips = pd.read_csv(os.path.join(self.root_folder, 'models', 'gtfs', 'exo', 'trips.txt'))
-                exo_routes = pd.read_csv(os.path.join(self.root_folder, 'models', 'gtfs', 'exo', 'routes.txt'))
-            except Exception as ex:
-                exo_trips = False
-                exo_routes = False
-                self.log.error('find_closest_train: ' + str(ex))
-
-            response = requests.get(exo_vehicle_url)
-            if response.status_code == 200:
-                exo_vehicles = gtfs_realtime_pb2.FeedMessage()
-                exo_vehicles.ParseFromString(response.content)
-            else:
-                self.log.error('find_closest_train: could not access EXO GTFS feed, error code: ' + str(response.status_code))
-                exo_vehicles = False
-
             #3 loop through all trains and determine distance
 
             # check for VIA trains:
             if not via_feed:
                 pass
             else:
-                for via_train in via_feed.entity:
-
-                    if via_train.HasField('vehicle'):
-                        vehicle = via_train.vehicle
-
-                        # time delta -- add later:
-                        #datetime.fromtimestamp(vehicle.timestamp) - datetime.now()
-
-                        # distance:
-                        dst = self.calculate_distance(lat, lon, vehicle.position.latitude, vehicle.position.longitude)
-
-                        # get destination from trips table
-                        train_str = ''
-                        try:
-                            condition = (via_trips['trip_id'] == int(vehicle.trip.trip_id)) & (via_trips['route_id'] == vehicle.trip.route_id)
-                            train_no = via_trips.loc[condition, 'trip_short_name'].values[0]
-                            train_destination = via_trips.loc[condition, 'trip_headsign'].values[0]
-                            dst_str = str(round(dst)) # distance in m
-
-                            try:
-                                asm_url = f'https://asm.transitdocs.com/train/{vehicle.trip.start_date[0:4]}/{vehicle.trip.start_date[4:6]}/{vehicle.trip.start_date[6:8]}/V/{vehicle.vehicle.id[15:]}'
-                            except:
-                                asm_url = ''
-
-                            train_str = f'VIA {train_no}, destination: {train_destination}'
-                            if len(asm_url) > 0:
-                                train_str += f', details: {asm_url}'
-
-                            self.log.debug(f'find_closest_train: Train No: {train_no} Destination: {train_destination}, distance: {dst} m')
-                        except:
-                            train_str = vehicle.vehicle.id
-
-                        if dst < dst_lim:
-                            nearby_trains.append(train_str)
-                        else:
-                            rejected_trains.append(train_str)
+                via_trains = self.get_trains(via_feed, 'VIA')
 
             # check for EXO trains:
-            if not exo_vehicles:
+            if not exo_feed:
                 pass
             else:
                 # now go through vehicles for location and assign train numbers from trips
-                for exo_vehicle in exo_vehicles.entity:
+                exo_trains = self.get_trains(exo_feed, 'exo')
 
-                    if exo_vehicle.HasField('vehicle'):
-                        vehicle = exo_vehicle.vehicle
-
-                        # time delta -- add later:
-                        #datetime.fromtimestamp(vehicle.timestamp) - datetime.now()
-
-                        # distance:
-                        dst = self.calculate_distance(lat, lon, vehicle.position.latitude, vehicle.position.longitude)
-
-                        # get train details
-                        train_str = ''
-
-                        # get train number/id
-                        exo_train_id = '(no assignment)'
-                        exo_destination = ''
-                        exo_route_name = ''
-
-                        # resolve train no. from trips table
-                        try:
-                            condition = (exo_trips['trip_id'] == vehicle.trip.trip_id)
-                            exo_train_id = str(exo_trips.loc[condition, 'trip_short_name'].values[0])
-                            exo_destination = exo_trips.loc[condition, 'trip_headsign'].values[0]
-                        except:
-                            self.log.error('find_closest_train: ' + str(ex))
-
-                        # resolve route name from routes table
-                        try:
-                            # because trip_id is numeric, pandas stores it as integer
-                            condition = (exo_routes['route_id'] == int(vehicle.trip.route_id))
-                            exo_route_name = exo_routes.loc[condition, 'route_long_name'].values[0]
-                        except:
-                            self.log.error('find_closest_train: ' + str(ex))
-
-
-                        # assign vehicle id and route number
-                        try:
-                            vehicle_id = vehicle.vehicle.id
-                            #route_id = vehicle.trip.route_id
-                            dst_str = str(round(dst)) # distance in m
-
-                            train_str = f'EXO {vehicle_id} on train EXO {exo_train_id}, route: {exo_route_name}, destination: {exo_destination}'
-
-                            self.log.debug(f'find_closest_train: Vehicle: {vehicle_id}, Train: {exo_train_id}, Route: {exo_route_name}, distance: {dst} m')
-                        except:
-                            train_str = vehicle.vehicle.id
-
-                        # check distance limit
-                        if dst < dst_lim:
-                            nearby_trains.append(train_str)
-                        else:
-                            rejected_trains.append(train_str)
+            self.nearby_trains = via_trains + exo_trains
 
             # log results
-            self.log.info('find_closest_train: accepted trains: ' + str(nearby_trains))
-            self.log.debug('find_closest_train: rejected trains: ' + str(rejected_trains))
+            if len(self.nearby_trains) > 0:
+                self.log.info(f'find_closest_train: accepted trains on cam {self.cam_num}: ' + str(self.nearby_trains))
 
         except Exception as ex:
             self.log.error('find_closest_train: error: ' + str(ex))
 
-        self.nearby_trains = nearby_trains
-        return nearby_trains
+        return self.nearby_trains
 
 
     # function to generate image caption
@@ -942,7 +953,7 @@ class image_capture:
         try:
             possible_trains = self.find_closest_train()
             if len(possible_trains) > 0:
-                caption += ' Train on picture is: ' + ' or '.join(possible_trains)
+                caption += ' Train on picture: ' + ' or '.join(possible_trains)
                 pass
         except Exception as ex:
             self.log.error('generate_caption: ' + str(ex))
@@ -1320,48 +1331,32 @@ class fb_helper:
         except Exception as ex:
             self.log.error('post_end: posting failed: ' + str(ex))
 
-"""
-class td_manager_connection:
-    def __init__(self):
-
-        self.log = logging.getLogger(__name__)
-
-        # Create a socket object
-        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-        # Define the host and port to listen on
-        host = '127.0.0.1'  # localhost
-        port = 7429
-
-        # Bind the socket to the host and port
-        server_socket.bind((host, port))
-
-        # Listen for incoming connections
-        server_socket.listen(1)
-
-        # Accept a client connection
-        self.client_socket, self.client_address = server_socket.accept()
-        self.log.info('Connected by', self.client_address)
-
-        return True
-
-    # Function to handle receiving data from the client
-    def receive_data(self):
-        # Receive data from the client
-        self.data = self.client_socket.recv(1024).decode()
-        if not self.data:
-            return False
-
-        self.log.info(f"received: {self.data}")
-
-        return self.data
-"""
-
 def main():
 
-    # setup logging
-    log = logging.getLogger(__name__)
-    logging.basicConfig(level = 'INFO')
+    requests.packages.urllib3.disable_warnings()  # Disable SSL warnings
+
+    # Set the root logger level to the lowest level you want to capture
+    logging.getLogger().setLevel(logging.DEBUG)
+
+    # Create a formatter for the log messages
+    log_format = "%(asctime)s - %(levelname)s - %(message)s"
+    formatter = logging.Formatter(log_format)
+
+    # Create a console handler and set its level to capture info-level messages
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+
+    # Create a file handler and set its level to capture debug-level messages
+    file_handler = logging.FileHandler("debug.log")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+
+    # Get the root logger and add the handlers
+    log = logging.getLogger()
+    log.addHandler(console_handler)
+    log.addHandler(file_handler)
+
 
     # base configuration
     log.info('Starting TrainDetector.')
@@ -1396,15 +1391,13 @@ def main():
 
     try:
         while(True):
-            time.sleep(18)
             for cam in cam_list:
                 try:
                     cam.process()
                 except Exception as ex:
                     log.error(f'Error processing camera: {cam.cam_num}' + str(ex))
 
-                #monitor memory usage
-                log.debug(f'Object for cam {cam.cam_num} uses {sys.getsizeof(cam)} bytes of memory.')
+            time.sleep(18)
 
     except KeyboardInterrupt:
         pass
