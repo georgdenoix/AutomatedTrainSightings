@@ -1,29 +1,37 @@
-cam_id,cam_type,cam_description,cam_format,fb_posting,nr_enable,nr_version,nr_training,motion_enable,mask,det_motion_only,disable_capture,right_orientation,left_orientation,motion_threshold
-119,vdm,CN St-Hyacinthe MP 72 (Pont Victoria),jpg,,,,,,,,x,,,
-180,vdm,CN St-Laurent (Ahuntsic),jpg,,x,2,x,,,,,,,
-212,vdm,CN Wharf Spur,jpg,x,x,8,x,,,,,,,
-258,vdm,CP Outremont Spur (Bellechasse/St-Laurent),jpg,,,,,,,,,,,
-268,vdm,"CP Adirondack MP 49, Wilderton crossing (Montréal)",jpg,x,x,8,x,,,,,,,0
-335,vdm,CN St-Laurent (RDP),jpg,,,,,,,,x,,,
-458,vdm,CN St-Laurent (Pie IX),jpg,,,,,,,,x,,,
-467,vdm,CP Outremont Spur (St-Grégoire/Papineau),jpg,,,,,,,,,,,
-505,vdm,CN Longue-Pointe,jpg,,,,,,,,x,,,
-513,vdm,CP Outremont Spur (Port),jpg,,,,,,,,x,,,
-3319,511,"CN Kingston MP 19, CP Vaudreuil MP 14 (Beaconsfield)",mp4,x,x,8,x,x,x,,,East,West,5
-3326,511,"CN Rouses Point, Aut. 10 at boul. Leduc",mp4,,,,x,x,x,,x,South,North,5
-3351,511,CN St-Hyacinthe MP 69.5 (Saint-Lambert),mp4,,x,6,x,x,x,,,East,West,5
-3362,511,CP Adirondack MP 43.5 (Lachine),mp4,x,x,4,x,x,x,,,North,South,5
-3365,511,CN Montreal MP 9 (Lachine),mp4,x,x,8,x,x,x,,,East,West,5
-3367,511,"CN Montreal MP 10.5, CP Vaudreuil MP 4 (Dorval)",mp4,x,x,6,x,x,x,,,East,West,5
-3371,511,"CN Kingston MP 11.5, CP Vaudreuil MP 6 (Gare Pine Beach)",mp4,x,x,4,x,x,x,,,East,West,5
-3373,511,"CN Kingston MP 21.5, CP Vaudreuil MP 16 (Sainte-Anne-de-Bellevue)",mp4,,x,2,x,x,x,,x,East,West,5
-3375,511,"CN Kingston, Aut. 20 (Dorion)",mp4,,,,x,,,,x,East,West,5
-3378,511,CN St-Hyacinthe MP 72 (Pont Victoria),mp4,x,x,9,x,x,x,,,East,West,5
-3379,511,CN St-Hyacinthe,mp4,,,,,,,,x,,,
-3380,511,CN St-Hyacinthe,mp4,,,,,,,,x,,,
-3399,511,CP Vaudreuil MP 3 (Lachine),mp4,x,x,4,x,x,x,,,East,West,5
-3814,511,"CN Montreal, Aut. 20 at boul. Angrignon (Turcot Ouest)",mp4,,,,x,,,,x,East,West,5
-3830,511,"CN Montreal, Route 136 (westward) at échangeur Turcot (East)",mp4,,,,x,x,x,x,,East,West,5
-3899,511,"CP Vaudreuil MP 4.5, CN Montreal MP 11 (Dorval)",mp4,x,x,7,x,x,x,,,West,East,5
-148,vdo,VIA Smiths Falls MP 4 (Fallowfield),jpg,,,,,,,,x,,,
-121,vdo,Sheffield - Sub. Alexandria,jpg,,,,,,,,x,,,
+ï»¿cam_id,cam_type,cam_description,latitude,longitude,cam_format,fb_posting,nr_enable,nr_version,nr_training,nr_mask,motion_enable,mask,p_motion,p_train,disable_capture,right_orientation,left_orientation,motion_threshold,motion_override
+121,vdo,Sheffield - Sub. Alexandria,0,0,jpg,,x,0,x,,,,,,x,,,,
+133,vdo,"ANR Renfrew MP 2 (Kanata, ON)",45.338682,-75.911689,jpg,,,,,,,,,,x,,,,
+148,vdo,VIA Smiths Falls MP 4 (Fallowfield),45.29544,-75.73914,jpg,,x,21,x,,,,,,x,,,,
+51,vdm,CP Outremont Spur (Beaubien / Parc),45.526269,-73.611411,jpg,,,,,,,,,,x,,,,
+81,vdm,CP Parc Sub (Jarry / Querbes),45.533258,-73.634574,jpg,,,,,,,,,,x,,,,
+119,vdm,CNÂ St-Hyacinthe MP 72Â (PontÂ Victoria),0,0,jpg,,,,,,,,,,x,,,,
+144,vdm,CP Parc Sub (Beaumont / Parc),45.528896,-73.617266,jpg,x,x,1,x,x,,x,,,,,,,0
+180,vdm,CN St-Laurent (Ahuntsic),45.534985,-73.662703,jpg,,x,11,x,x,,x,,,,,,,0
+212,vdm,CN Wharf Spur,0,0,jpg,x,x,20,x,x,,x,,,,,,,0
+258,vdm,CP Outremont Spur (Bellechasse/St-Laurent),0,0,jpg,x,x,0,x,x,,x,,,,,,,0
+268,vdm,"CP Adirondack MP 49, Wilderton crossing (MontrÃ©al)",45.51341,-73.63146,jpg,,x,20,x,,,,,,,,,,0
+335,vdm,CN St-Laurent MP 130.5 (RDP),45.65914,-73.541677,jpg,x,x,7,x,x,,x,,,,,,,0
+458,vdm,CN St-Laurent (Pie IX),0,0,jpg,,,,,,,,,,x,,,,
+467,vdm,CP Outremont Spur (St-GrÃ©goire/Papineau),0,0,jpg,,,,,,,,,,x,,,,
+505,vdm,CN Longue-Pointe,0,0,jpg,,,,,,,,,,x,,,,
+513,vdm,CP Outremont Spur (Port),0,0,jpg,,,,,,,,,,x,,,,
+3319,511,"CNÂ Kingston MP 19, CP Vaudreuil MP 14Â (Beaconsfield)",45.41829,-73.91698,mp4,x,x,10,x,x,x,x,x,x,,East,West,5,0
+3326,511,"CNÂ RousesÂ Point MP 37.5 (Brossard, Aut.Â 10Â atÂ boul.Â Leduc)",45.45610644,-73.44631453,mp4,x,x,5,x,x,x,x,x,,,South,North,5,0
+3351,511,CN St-Hyacinthe MP 69.5 (Saint-Lambert),45.504298,-73.488868,mp4,x,x,13,x,x,x,x,x,x,,East,West,5,0
+3362,511,CP Adirondack MP 43.5 (Lachine),45.44234,-73.65454,mp4,x,x,10,x,x,x,x,,,,North,South,5,0
+3365,511,CNÂ Montreal MP 9 (Lachine),45.44757,-73.68339,mp4,x,x,19,x,x,x,x,x,x,,East,West,5,0
+3367,511,"CNÂ Montreal MP 10.5, CP Vaudreuil MP 4Â (Lachine)",45.4482,-73.7176,mp4,x,x,21,x,x,x,x,x,x,,East,West,10,0
+3371,511,"CNÂ Kingston MP 11.5, CP Vaudreuil MP 6Â (GareÂ PineÂ Beach)",45.44888,-73.76682,mp4,x,x,12,x,x,x,x,x,x,,East,West,5,0
+3373,511,"CN Kingston MP 21.5, CP Vaudreuil MP 16 (Sainte-Anne-de-Bellevue)",45.40522,-73.9535,mp4,x,x,5,x,x,x,x,,,,East,West,5,0
+3375,511,"CNÂ Kingston,Â Aut.Â 20Â (Dorion)",0,0,mp4,,,,x,,,,,,x,East,West,5,
+3378,511,CNÂ St-Hyacinthe MP 72Â (PontÂ Victoria),45.48704,-73.54208,mp4,x,x,22,x,x,x,x,x,,,East,West,32,0
+3379,511,CN St-Hyacinthe,0,0,mp4,,,,,,,,,,x,,,,
+3380,511,"CN St-Hyacinthe MP 71 (Saint-Lambert, Aut. 20 at Pont Victoria)",45.496627,-73.514624,mp4,x,x,1,x,x,x,x,,,,East,West,3,0
+3399,511,CPÂ Vaudreuil MP 3Â (Lachine),45.44886,-73.69731,mp4,x,x,14,x,,x,x,x,x,,East,West,5,0
+3532,511,"CN Bridge MP 13 (Quebec, Aut. 973 at rue Soumande)",46.82647848,-71.25417826,mp4,x,x,2,x,,,,,,,,,,0
+3549,511,Aut. 20 (eastward) at route Lagueux,0,0,mp4,,,,x,,,,,,x,,,,
+3574,511,CN Bridge MP 7.8 (Quebec Aut. 540 at boul. du Versant-Nord),46.7775224,-71.33102279,mp4,x,x,2,x,x,x,x,,,,West,East,5,0
+3743,511,"CN Bridge MP 2 (Levis, Route 175 at pont de QuÃ©bec)",46.743469,-71.286654,mp4,x,x,2,x,x,x,x,,,,North,South,,0
+3814,511,"CNÂ Montreal,Â Aut.Â 20Â atÂ boul.Â AngrignonÂ (TurcotÂ Ouest)",45.454477,-73.628514,mp4,,x,1,x,x,x,x,x,x,,East,West,5,0
+3830,511,"CNÂ Montreal,Â RouteÂ 136Â atÂ EchangeurÂ TurcotÂ (East)",45.467183,-73.602558,mp4,x,x,7,x,x,x,x,x,x,,East,West,4,0
+3899,511,"CPÂ Vaudreuil MP 4.5, CN Montreal MP 11 (Dorval)",45.44958,-73.7377,mp4,x,x,16,x,x,x,x,x,x,,West,East,15,40
