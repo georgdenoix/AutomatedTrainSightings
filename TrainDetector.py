@@ -20,6 +20,7 @@ from facebook import GraphAPI
 import sys
 import sqlite3
 from google.transit import gtfs_realtime_pb2
+from collections import Counter
 
 class train_location:
 
@@ -34,7 +35,7 @@ class train_location:
         self.static_gtfs_folder = static_gtfs_folder
 
         # list of valid agencies
-        self.valid_agencies = ['via', 'exo']
+        self.valid_agencies = ['via', 'exo', 'go']
 
         # initialize data
         self.reset(agencies.copy())
@@ -87,11 +88,13 @@ class train_location:
         self.trains = []
 
         self.agency_credential_file = {
-            'exo': 'exo_credentials.txt'
+            'exo': 'exo_credentials.txt',
+            'go': 'go_credentials.txt'
         }
 
         self.agency_credential = {
-            'exo': ''
+            'exo': '',
+            'go': ''
         }
 
         for agency in self.agency_credential.keys():
@@ -99,7 +102,8 @@ class train_location:
 
         self.agency_feed_url = {
             'via': 'https://asm-backend.transitdocs.com/gtfs/via',
-            'exo': f'https://opendata.exo.quebec/ServiceGTFSR/VehiclePosition.pb?token={self.agency_credential["exo"]}&agency=TRAINS'
+            'exo': f'https://opendata.exo.quebec/ServiceGTFSR/VehiclePosition.pb?token={self.agency_credential["exo"]}&agency=TRAINS',
+            'go': f'https://api.openmetrolinx.com/OpenDataAPI/api/V1/Gtfs.proto/Feed/VehiclePosition?key={self.agency_credential["go"]}'
         }
 
         # read trips and routes for each agency
@@ -110,14 +114,18 @@ class train_location:
             trips_file = os.path.join(self.static_gtfs_folder, agency, 'trips.txt')
             if os.path.isfile(trips_file):
                 self.trips[agency] = pd.read_csv(trips_file)
+                self.log.info(f'train_location.reset: read {trips_file}.')
             else:
                 self.trips[agency] = False
+                self.log.error(f'train_location.reset: could not read {trips_file}.')
 
             routes_file = os.path.join(self.static_gtfs_folder, agency, 'routes.txt')
             if os.path.isfile(routes_file):
                 self.routes[agency] = pd.read_csv(routes_file)
+                self.log.info(f'train_location.reset: read {routes_file}.')
             else:
                 self.routes[agency] = False
+                self.log.error(f'train_location.reset: could not read {routes_file}.')
 
         return True
 
@@ -150,19 +158,76 @@ class train_location:
 
         return distance
 
-    def train_description(self, train_info = {}):
-
-        train_str = ''
+    def update_coordinates(self, latitude, longitude, speed, heading, time):
+        # Earth's radius in meters
+        earth_radius = 6371000
 
         try:
 
+            # Convert latitude and longitude from degrees to radians
+            lat1 = math.radians(latitude)
+            lon1 = math.radians(longitude)
+
+            # Calculate distance traveled
+            distance = speed * time  # in meters
+
+            # Calculate the new latitude
+            new_lat = math.asin(math.sin(lat1) * math.cos(distance / earth_radius) +
+                                math.cos(lat1) * math.sin(distance / earth_radius) * math.cos(math.radians(heading)))
+
+            # Calculate the new longitude
+            new_lon = lon1 + math.atan2(math.sin(math.radians(heading)) * math.sin(distance / earth_radius) * math.cos(lat1),
+                                        math.cos(distance / earth_radius) - math.sin(lat1) * math.sin(new_lat))
+
+            # Convert new latitude and longitude from radians to degrees
+            new_lat = math.degrees(new_lat)
+            new_lon = math.degrees(new_lon)
+        except Exception as ex:
+            self.log.error('update_coordinates: ' + str(ex))
+            return 0, 0
+
+        return new_lat, new_lon
+
+    def train_description(self, train_info = {}, include_carlist = False):
+
+        train_str = ''
+        via_carlist = ''
+
+        #self.log.debug(f'train_description: building description for {train_info["agency"]} {train_info["id"]}, include car list: {include_carlist}.')
+
+        try:
+            ## Agency specific parts (prefix):
             if train_info['agency'] == 'exo':
                 train_str = f'EXO {train_info["vehicle_id"]} on '
 
-            # build train string
-            train_str += f'{train_info["agency"]} {train_info["id"]}, route: {train_info["route_name"]}, destination: {train_info["destination"]}'
-            if (len(train_info["asm_url"]) > 0) and train_info['agency'] == 'via':
-                train_str += f', details: {train_info["asm_url"]}'
+            if train_info['agency'] == 'go':
+                train_str = f'GO {train_info["vehicle_id"]} on '
+
+            ## build main description
+            train_str += f'{train_info["agency"].upper()} {train_info["id"]}'
+
+            if len(train_info["route_name"]) > 0:
+                train_str += f', route: {train_info["route_name"]}'
+
+            if len(train_info["destination"]) > 0:
+                train_str += f', destination: {train_info["destination"]}'
+
+            if train_info['speed'] > 0:
+                train_str += f', speed: {int(train_info["speed"])} km/h'
+
+            ## Specific to VIA:
+            if (train_info['agency'] == 'via'):
+
+                # Add equipment detail
+                if include_carlist:
+                    #self.log.debug(f'train_description: requesting car list.')
+                    via_equipment = self.get_equipment(train_info['id'], train_info['trip_start'])
+                    if len(via_equipment) > 0:
+                        train_str += (', equipment: ' + via_equipment)
+
+                # add asm url
+                if len(train_info["asm_url"]) > 0:
+                    train_str += f', details: {train_info["asm_url"]}'
 
         except Exception as ex:
             self.log.error('train_description: ' + str(ex))
@@ -200,77 +265,159 @@ class train_location:
                 self.log.error(f'get_trains: error accessing gtfs feed from {agency} at {self.agency_feed_url[agency]}: {ex}')
                 continue
 
+            no_trains = 0
+
             #collect train information
             for train in vehicles.entity:
 
                 if train.HasField('vehicle'):
                     vehicle = train.vehicle
 
-                    #self.log.debug('train_list is currently ' + str(len(train_list)) + ' elements long. Current agency: ' + agency + ', current train: ' + train.id)
+                    #self.log.info(f"read_trains: processing agency: {agency}, vehicle: {vehicle.vehicle.id}, on route: {vehicle.trip.route_id}")
 
-                    for stored_train in train_list:
-                        if stored_train['trip_id'] == vehicle.trip.trip_id:
-                            self.log.debug('duplicate trip ' + vehicle.trip.trip_id)
-                            continue
+                    try:
+                        # for GO, skip buses
+                        if (agency == 'go') and (len(vehicle.trip.route_id) > 2):
+                            if vehicle.trip.route_id[-2:].isdigit():
+                                #self.log.info(f"read_trains: skipping go bus {vehicle.vehicle.id}.")
+                                continue
+
+                        # skip if train is already in list
+                        for stored_train in train_list:
+                            if vehicle.trip.HasField('trip_id'):
+                                if stored_train['trip_id'] == vehicle.trip.trip_id:
+                                    self.log.debug('duplicate trip ' + vehicle.trip.trip_id)
+                                    continue
+
+                    except Exception as ex:
+                        self.log.error(f"read_trains: {str(ex)}, agency: {agency}, {vehicle.vehicle.id}")
 
                     train_info = {}
 
+                    #train_info['id_alt'] = ''
+                    train_info['trip_start'] = ''
                     train_info['agency'] = agency
-                    train_info['label'] = agency[:3]
+                    #train_info['label'] = agency[:3]
+
+                    ## get vehicle ID (engine no. for some agencies)
                     train_info['vehicle_id'] = vehicle.vehicle.id
 
-                    # resolve train no. from trips table
+                    # strip "AMT" prefix if present:
+                    if len(train_info['vehicle_id']) > 3:
+                        if train_info['vehicle_id'][:3] == "AMT":
+                            train_info['vehicle_id'] = train_info['vehicle_id'][3:]
+
+                    ## get TRAIN NUMBER
                     try:
                         try:
                             trip_id = vehicle.trip.trip_id if isinstance(vehicle.trip.trip_id, int) else int(vehicle.trip.trip_id)   # fixed
                         except:
                             trip_id = vehicle.trip.trip_id
 
-                        condition = (self.trips[agency]['trip_id'] == trip_id)
                         train_info['trip_id'] = vehicle.trip.trip_id
+                        train_info['id'] = ''
 
-                        trip_short_name = self.trips[agency].loc[condition, 'trip_short_name'].values
-                        if len(trip_short_name) > 0:
-                            train_info['id'] = str(trip_short_name[0])
+                        # VIA stores train number in last characters of vehicle id
+                        if (agency == 'via'):
+                            if len(vehicle.vehicle.id) > 15:
+                                train_info['id'] = vehicle.vehicle.id[15:]
+
+                        # GO stores train number in last digits of train id
+                        if (agency == 'go'):
+                            if len(train.id) > 12:
+                                train_info['id'] = train.id[12:]
+
+
+                        # get the train number from GTFS "trips" table as "trip_short_name" - EXO and VIA only, empty for GO
+                        if isinstance(self.trips[agency], bool):
+                            trip_short_name = ''
                         else:
-                            self.log.error(f'read_trains: could not find matching "trip_short_name" (train number) in {agency} trips for trip_id {trip_id} and vehicle {vehicle.vehicle.id}.')
-                            train_info['id'] = ''
+                            condition = (self.trips[agency]['trip_id'] == trip_id)
+                            trip_short_name = self.trips[agency].loc[condition, 'trip_short_name'].values
 
-                        trip_headsign = self.trips[agency].loc[condition, 'trip_headsign'].values
+                        # use look-up from trip list (trips.txt) in all other cases
+                        if (len(trip_short_name) > 0) and (train_info['id'] == ''):
+                            train_info['id'] = str(trip_short_name[0])
+
+                        #if len(trip_short_name) > 0:
+                        #    # found train no. in trips, so we can use it
+                        #    train_info['id'] = str(trip_short_name[0])
+                        #else:
+                        #    # VIA has the train number encoded in the vehicle id
+                        #    if (agency == 'via') and len(vehicle.vehicle.id) > 15:
+                        #       train_info['id'] = vehicle.vehicle.id[15:]
+                        #    # GO uses the last digits of the train.id for the train number
+                        #    elif (agency == 'go') and len(train.id) > 12:
+                        #        train_info['id'] = train.id[12:]
+                        #    else:
+                        #        train_info['id'] = ''
+                        #    self.log.debug(f'read_trains: could not find matching "trip_short_name" (train number) in {agency} trips for trip_id "{trip_id}" and vehicle {vehicle.vehicle.id}. Using {train_info["id"]} instead.')
+
+                    except Exception as ex:
+                        self.log.error(f"read_trains: while getting train number for {agency} {vehicle.vehicle.id}: {str(ex)}")
+                        train_info['id'] = ''
+                        pass
+
+                    ## get the TRAIN DESTINATION from GTFS "trips" table as "trip_headsign"
+                    try:
+                        if isinstance(self.trips[agency], bool):
+                            trip_headsign = ''
+                        else:
+                            trip_headsign = self.trips[agency].loc[condition, 'trip_headsign'].values
+
                         if len(trip_headsign) > 0:
                             train_info['destination'] = str(trip_headsign[0])
                         else:
-                            self.log.error(f'read_trains: could not find matching "trip_headsign" (destination) in {agency} trips for trip_id {trip_id} and vehicle {vehicle.vehicle.id}.')
+                            self.log.debug(f'read_trains: could not find matching "trip_headsign" (destination) in {agency} trips for trip_id {trip_id} and vehicle {vehicle.vehicle.id}.')
                             train_info['destination'] = ''
 
+                        # Specific to GO
+                        if (agency == 'go'):
+                            # Destination is stored in Vehicle Label, get it from there if trips.txt could not resolve it:
+                            if len(train_info['destination']) < 5:
+                                train_info['destination'] = vehicle.vehicle.label
+
+                            # strip first characters as they repeat the route:
+                            if len(train_info['destination']) > 5:
+                                train_info['destination'] = train_info['destination'][5:]
+
                     except Exception as ex:
-                        self.log.error(ex)
+                        self.log.error(f"read_trains: while getting destination for {agency} {vehicle.vehicle.id}: {str(ex)}")
+                        train_info['destination'] = ''
                         pass
 
-                    # resolve route name from routes table
+                    ## resolve ROUTE NAME from routes table
                     try:
+                        # extract route id
                         try:
                             route_id = vehicle.trip.route_id if isinstance(vehicle.trip.route_id, int) else int(vehicle.trip.route_id)  # fixed
                         except:
                             route_id = vehicle.trip.route_id
 
-                        condition = (self.routes[agency]['route_id'] == route_id)
+                        #get the route name from GTFS "routes" table as "route_long_name"
+                        if isinstance(self.routes[agency], bool):
+                            route_long_name = ''
+                        else:
+                            condition = (self.routes[agency]['route_id'] == route_id)
+                            route_long_name = self.routes[agency].loc[condition, 'route_long_name'].values
 
-                        route_long_name = self.routes[agency].loc[condition, 'route_long_name'].values
                         if len(route_long_name) > 0:
                             train_info['route_name'] = str(route_long_name[0])
                         else:
-                            self.log.error(f'read_trains: could not find matching "route_long_name" (route name) in {agency} routes for route_id {route_id} and vehicle {vehicle.vehicle.id}.')
+                            self.log.debug(f'read_trains: could not find matching "route_long_name" (route name) in {agency} routes for route_id "{route_id}" and vehicle "{vehicle.vehicle.id}".')
                             train_info['route_name'] = ''
 
                     except Exception as ex:
-                        self.log.error(ex)
+                        self.log.error(f"read_trains: while getting route name for {agency} {vehicle.vehicle.id}: {str(ex)}")
+                        train_info['route_name'] = ''
                         pass
 
                     # if agency is via, construct asm_url
                     if agency == 'via':
                         try:
                             train_info['asm_url'] = f'https://asm.transitdocs.com/train/{vehicle.trip.start_date[0:4]}/{vehicle.trip.start_date[4:6]}/{vehicle.trip.start_date[6:8]}/V/{vehicle.vehicle.id[15:]}'
+                            #train_info['id_alt'] = vehicle.vehicle.id[15:]
+                            train_info['trip_start'] = f'{vehicle.trip.start_date[0:4]}-{vehicle.trip.start_date[4:6]}-{vehicle.trip.start_date[6:8]}'
                         except:
                             train_info['asm_url'] = ''
                     else:
@@ -279,62 +426,174 @@ class train_location:
                     # train position
                     train_info['latitude'] = vehicle.position.latitude
                     train_info['longitude'] = vehicle.position.longitude
-
-                    # train speed
-                    train_info['speed'] = str(round(vehicle.position.speed, 1))
+                    train_info['heading'] = vehicle.position.bearing
+                    train_info['speed'] = int(vehicle.position.speed * 3.6) # converted to km/h
 
                     # time stamp
                     train_info['time'] = datetime.fromtimestamp(vehicle.timestamp)
+                    timedelta = datetime.now() - train_info['time']
+
+                    # estimate current train location, based on time since update, heading, and speed
+                    lat_est, lon_est = self.update_coordinates(vehicle.position.latitude, vehicle.position.longitude, vehicle.position.speed, vehicle.position.bearing, timedelta.seconds)
+                    train_info['latitude_est'] = lat_est
+                    train_info['longitude_est'] = lon_est
 
                     # generate train description
                     #train_info['description'] = self.train_description(train_info)
 
                     # append to list
                     train_list.append(train_info)
+                    no_trains += 1
                 else:
                     pass
                     #self.log.debug('skipping: ' + str(train.id))
-
+            self.log.info(f'train_location.read_trains: read information about {no_trains} trains from {agency}.')
         # store train list internally
         self.train_list = train_list
 
-        self.log.info(f'train_location.read_trains: read information about {len(train_list)} trains.')
+        self.log.debug(f'train_location.read_trains: read information about {len(train_list)} trains.')
 
         # also return train list
         return train_list
 
-    def nearby_trains(self, location = (0, 0), max_dist = -1, max_age = -1):
+    def get_equipment(self, train_no = '', trip_start = ''):
+
+        traincars = ""
+
+        #self.log.debug(f'get_equipment: trying to get car list for via {train_no} and date {trip_start}.')
+        try:
+            traincar_data = {}
+            traincar_data['number'] = train_no
+
+            try:
+                # Try to parse the date string with the specified format
+                datetime.strptime(trip_start, "%Y-%m-%d")
+                traincar_data['date'] = trip_start
+            except Exception as ex:
+                # If parsing fails, it’s not a valid date in this format
+                self.log.error("get_equipment:", trip_start, "was not a valid trip start date, using today's date.")
+                traincar_data['date'] = datetime.now().strftime("%Y-%m-%d")
+
+            # get all VIA train information
+            via_url = "https://tsimobile.viarail.ca/data/allData.json"
+            via_response = requests.post(via_url)
+
+            # Check the response
+            if via_response.status_code == 200:
+                response_data = via_response.json()
+
+            else:
+                self.log.error("get_equipment:", str(via_response.status_code), via_response.text)
+                return traincars
+
+            # get origin and destination for requested train
+            stations = response_data.get(train_no).get('times', [])
+            traincar_data['origin'] = stations[0].get('code')
+            traincar_data['destination'] = stations[-1].get('code')
+
+            # get car data for this train
+            self.log.debug(f'get_equipment: requesting car list for {traincar_data["number"]}, {traincar_data["date"]}, from {traincar_data["origin"]} to {traincar_data["destination"]}.')
+            traincar_url = "https://traincar.info/api"
+            traincar_response = requests.post(traincar_url, json = traincar_data)
+
+            # Check the response
+            if traincar_response.status_code == 200:
+                response_data = traincar_response.json()
+                #self.log.debug('get_equipment: got ' + str(len(response_data.get("carriageLayout", {}))) + ' cars back.')
+            else:
+                self.log.error("get_equipment:", str(traincar_response.status_code), traincar_response.text)
+                return traincars
+
+            # get list of cars
+            cars = response_data.get("carriageLayout", {}).get("carriages", [])
+            car_list = []
+            seats_total = 0
+            seats_free = 0
+            seats_occupied = 0
+
+            # go through cars and collect equipment type and sum up available seats
+            for car in cars:
+                car_list.append(car.get("carriage_code"))
+
+                seats = car.get("seats", [])
+                for seat in seats:
+                    if seat.get("available"):
+                        seats_free += 1
+                    if not(seat.get("blocked")):
+                        seats_total += 1
+
+            # counts per car type, example: Counter({'VID': 8, 'REN': 5, 'HEP': 1})
+            car_counts = Counter(car_list)
+
+            if False: #len(car_counts) == 1:
+                traincars = f"all {list(car_counts.keys())[0]}"
+            else:
+                eqt_counts = []
+                for element, count in car_counts.items():
+                    eqt_counts.append(f"{count:.0f} {element}")
+                traincars = ", ".join(eqt_counts)
+
+            # calculate % of occupied seats:
+            if (seats_total > 0):
+                seats_occupied = int(100 * (1 - (seats_free / seats_total)))
+            else:
+                seats_occupied = -1
+
+            self.log.info(f'get_equipment: {traincar_data["number"]}, {traincar_data["date"]}, from {traincar_data["origin"]} to {traincar_data["destination"]} seats total: {seats_total}, seats free: {seats_free}, occupied: {seats_occupied}%')
+
+            if seats_total > 0:
+                traincars += f', occupied: {seats_occupied}%'
+
+            self.log.info(f'get_equipment: returning {traincars}')
+
+        except Exception as ex:
+            self.log.error("get_equipment: " + str(ex))
+            traincars = ""
+
+        return traincars
+
+    def nearby_trains(self, location = (0, 0), max_dist = -1, max_age = -1, min_speed = 1):
 
         # initialize empty train list
         nearby_trains = []
         rejected_trains = []
 
         #2 get reference coordinates
-        lat = location[0]
-        lon = location[1]
+        lat_cam = location[0]
+        lon_cam = location[1]
 
-        if (lon == 0) or (lat == 0):
-            self.log.debug(f'nearby_trains: skipping, reference location is not set.')
-            return nearby_trains
-        else:
-            self.log.debug(f'nearby_trains: comparing train positions with camera location {lat}, {lon}.')
+        try:
 
-        # loop through trains:
-        for train_info in self.train_list:
-
-            timedelta = datetime.now() - train_info['time']
-
-            # distance:
-            dst = self.calculate_distance(lat, lon, train_info['latitude'], train_info['longitude'])
-            dst_str = str(round(dst)) # distance in m
-
-            # check distance and time limit
-            if ((max_dist == -1) or (dst <= max_dist)) and ((max_age == -1) or (timedelta.seconds <= max_age)):
-                nearby_trains.append(train_info)
-                self.log.debug(f'nearby_trains: accepted train: {self.train_description(train_info)}')
+            if (lon_cam == 0) or (lat_cam == 0):
+                self.log.debug(f'nearby_trains: skipping, reference location is not set.')
+                return nearby_trains
             else:
-                self.log.debug(f'nearby_trains: rejected train: {self.train_description(train_info)}, distance: {int(dst)} m, age: {timedelta.seconds} s')
-                rejected_trains.append(train_info)
+                self.log.debug(f'nearby_trains: comparing train positions with camera location {lat_cam}, {lon_cam}; max distance: {max_dist} m, max data age: {max_age} s.')
+
+            # loop through trains:
+            for train_info in self.train_list:
+
+                timedelta = datetime.now() - train_info['time']
+
+                if train_info['agency'].lower() == 'exo':
+                    max_dist = max(max_dist * 0.2, 600)
+                    max_age = max(max_age * 0.2, 60)
+                    self.log.debug(f'nearby_trains: for EXO train, reduced thresholds to: {max_dist} m and {max_age} s.')
+
+                # distance:
+                dst_est = self.calculate_distance(lat_cam, lon_cam, train_info['latitude_est'], train_info['longitude_est'])
+                dst = self.calculate_distance(lat_cam, lon_cam, train_info['latitude'], train_info['longitude'])
+                dst_str = str(round(dst)) # distance in m
+
+                # check distance and time limit
+                if ((max_dist == -1) or (dst_est <= max_dist)) and ((max_age == -1) or (timedelta.seconds <= max_age)) and (train_info['speed'] >= min_speed):
+                    nearby_trains.append(train_info)
+                    self.log.debug(f'nearby_trains: accepted train: {self.train_description(train_info)}, estimated distance: {int(dst_est)} m (from {int(dst)} m), age: {timedelta.seconds} s')
+                else:
+                    self.log.debug(f'nearby_trains: rejected train: {self.train_description(train_info)}, estimated distance: {int(dst_est)} m (from {int(dst)} m), age: {timedelta.seconds} s')
+                    rejected_trains.append(train_info)
+        except Exception as ex:
+            self.log.error('nearby_trains: ' + str(ex))
 
         return nearby_trains
 
@@ -376,6 +635,7 @@ class image_capture:
             'file_name': '',
             'file_type': '',
             'shows_train': False,
+            'detection_valid': False,
             'motion_value': 0,
             'motion_detected': False,
             'classified': False,
@@ -405,11 +665,11 @@ class image_capture:
 
         # configuration (to be read from configuration file)
         self.cam_config = {}
-        self.train_location_timeout = 190
-        self.train_location_distance = 850
 
         self.nr_disable = False  # keep in case model cannot be loaded
         self.loaded_nr_version = -1   # keep to identify if new version specified
+
+        self.detections = []
 
         # read configuration
         self.read_configuration()
@@ -554,16 +814,16 @@ class image_capture:
 
     # function to set video posting inhibit to now + 24 hrs
     def set_video_post_inhibit(self):
-        self.fb_video_inhibit = datetime.now() + timedelta(hours = 24)
+        self.fb_video_inhibit = datetime.now() + timedelta(hours = 2) # adjusted to 2 hrs; fb time-out is usually 7h
         self.log.info(f'set_video_post_inhibit: video positing for camera {self.cam_num} inhibited until: {self.fb_video_inhibit}.')
         return True
 
 
     # function to access individual configuration value
-    def conf_value(self, key):
+    def conf_value(self, key, default_value = False):
 
-        # initialise with FALSE
-        ret_val = False
+        # initialise with default value
+        ret_val = default_value
         use_config = {}
 
         # check if list, if so, take first element
@@ -579,8 +839,8 @@ class image_capture:
             if key in use_config.keys():
                 read_val = use_config[key]
             else:
-                self.log.error(f'conf_value - key {key} does not exist.')
-                read_val = False
+                self.log.error(f'conf_value: key {key} does not exist.')
+                #read_val = default_value
 
             # clean strings
             if isinstance(read_val, str):
@@ -596,9 +856,11 @@ class image_capture:
             # nan means FALSE
             if isinstance(read_val, float):
                 if math.isnan(read_val):
-                    ret_val = False
+                    ret_val = default_value
         else:
             self.log.error('conf_value: configuration passed is not a dictionary.')
+
+        #self.log.debug(f'conf_value: for camera {self.cam_num} - key: {key}, read value: {read_val}, return value: {ret_val}, default: {default_value}')
 
         return ret_val
 
@@ -684,6 +946,16 @@ class image_capture:
             self.file_name = f'{self.base_file_name}.jpg'
             self.record["file_type"] = 'jpg'
 
+        elif self.conf_value('cam_type') == 'tro':
+            cam_URL = f'https://opendata.toronto.ca/transportation/tmc/rescucameraimages/CameraImages/loc{self.cam_num}.jpg'
+            self.file_name = f'{self.base_file_name}.jpg'
+            self.record["file_type"] = 'jpg'
+
+        elif self.conf_value('cam_type') == '511on':
+            cam_URL = f'https://511on.ca/map/Cctv/833{self.cam_num}'
+            self.file_name = f'{self.base_file_name}.jpg'
+            self.record["file_type"] = 'jpg'
+
         else:
             cam_type = self.conf_value('cam_type')
             self.record["file_type"] = ''
@@ -725,6 +997,7 @@ class image_capture:
         if self.new_data:
             self.last_data_checksum = new_checksum
             self.record["cnt_pic"] += 1
+            self.log.debug(f'acquire_camera_data: successfully saved: {video_file.name}')
 
         else:
             #restore last file name
@@ -858,7 +1131,7 @@ class image_capture:
 
                             # store that this image was processed (classified)
                             self.record["classified"] = True
-                            self.log.info(f'classify_nr: {img_file} is showing a train: {self.record["nr_confidence"]} => {self.record["shows_train"]}, detection count: {self.record["detection_count"]}, threshold: {self.record["detection_threshold"]}; cnt: {self.record["cnt_pic"]}, train: {self.record["cnt_train"]}, no_train: {self.record["cnt_no_train"]}')
+                            self.log.info(f'classify_nr: {img_file} from camera {self.cam_num} is showing a train: {self.record["shows_train"]} ({self.record["nr_confidence"]}) , detection count: {self.record["detection_count"]}, threshold: {self.record["detection_threshold"]}; cnt: {self.record["cnt_pic"]}, train: {self.record["cnt_train"]}, no_train: {self.record["cnt_no_train"]}')
 
                         except Exception as ex:
                             self.log.error(f'classify_nr: something went wrong processing {img_path}: ' + str(ex))
@@ -1062,12 +1335,12 @@ class image_capture:
 
         # store detected motion value
         self.record["motion_value"] = X
-        if X > self.conf_value('motion_threshold'):
+        if X > self.conf_value('motion_threshold', 5):
             self.record["motion_detected"] = True
             self.record["direction"] = self.conf_value('right_orientation')
             self.log.info(f'detect_motion: Objects on camera {self.cam_num} were mostly moving RIGHT - motion value: {X}, with threshold: {self.conf_value("motion_threshold")}.')
 
-        elif X < -self.conf_value('motion_threshold'):
+        elif X < -self.conf_value('motion_threshold', 5):
             self.record["motion_detected"] = True
             self.record["direction"] = self.conf_value('left_orientation')
             self.log.info(f'detect_motion: Objects on camera {self.cam_num} were mostly moving LEFT - motion value: {X}, with threshold: {self.conf_value("motion_threshold")}.')
@@ -1078,8 +1351,26 @@ class image_capture:
 
         return True
 
+    # To log timestamp of setection (used for threshold evaluation)
+    def log_detection(self, max_age = 48):
+        current_time = datetime.now()
+        cutoff_time = current_time - timedelta(hours = max_age)
+
+        self.detections.append(current_time) # add current time
+
+        # remove old entries
+        self.detections = [entry for entry in self.detections if entry > cutoff_time]
+
+        return True
+
+    # Return count of detections in past xx hours
+    def detection_cnt(self, threshold_hours = 1):
+        cutoff_time = datetime.now() - timedelta(hours = threshold_hours)
+        count = sum(1 for entry in self.detections if entry >= cutoff_time)
+        return count
+
     # function to generate image caption
-    def generate_caption(self, train_info):
+    def generate_caption(self, train_info, include_carlist = False):
 
         # Construct message for posting
         try:
@@ -1097,7 +1388,7 @@ class image_capture:
             else:
                 motion_text = ' heading ' + self.conf_value('left_orientation')
 
-        caption = 'Train' + motion_text + ' detected at ' + self.record["time"] + ' on camera ' + cam_text + ' [' + str(self.cam_num) + '] on ' + self.record["date"] + '.'
+        caption = 'Train' + motion_text + ' detected on camera ' + cam_text + ' [' + str(self.cam_num) + '] on ' + self.record["date"] + ' at ' + self.record["time"] + '.'
 
         # try to find matching trains
         try:
@@ -1105,10 +1396,10 @@ class image_capture:
 
                 train_descriptions = []
                 for train in self.nearby_trains:
-                    train_descriptions.append(train_info.train_description(train))
+                    train_descriptions.append(train_info.train_description(train, include_carlist))
 
                 if len(train_descriptions) > 0:
-                    caption += ' Train on picture: ' + ' or '.join(train_descriptions)
+                    caption += ' Train on picture could be: ' + ' or '.join(train_descriptions)
 
         except Exception as ex:
             self.log.error('generate_caption: ' + str(ex))
@@ -1135,8 +1426,8 @@ class image_capture:
 
         source_file = os.path.join(self.root_folder, self.input_folder, self.file_name)
 
-        # Image shows a train, so move it to the right folder
-        if self.record["shows_train"] and ((self.record["detection_count"] <= self.record["detection_threshold"]) or ignore_threshold):
+        # Image shows a (valid) train, so move it to the right folder
+        if self.record["shows_train"] and self.record["detection_valid"]:
 
             # Showing train
             if delete_jpg and self.record["file_type"] == 'mp4':
@@ -1264,6 +1555,7 @@ class image_capture:
         if self.conf_value('nr_version') != self.loaded_nr_version:
             self.nr_disable = False
             self.load_model()
+            self.detections = []
 
         #1 - Access camera data (download mp4 video to Inbox):
         if not self.conf_value('disable_capture'):
@@ -1280,7 +1572,7 @@ class image_capture:
         #2a - Extract still frame (always do, so that collected data can be used for training)
         self.extract_frames()
 
-        #2b - Extract still frame and determine if it shows a train
+        #2b - Determine if it shows a train
         if not self.nr_disable and self.conf_value('nr_enable'):
             self.classify_nr()
 
@@ -1290,44 +1582,66 @@ class image_capture:
 
             #3b - check if motion is high enough to override nr classification
             try:
-                if (self.conf_value("motion_override") > self.conf_value("motion_threshold")) and (self.record["motion_value"] > self.record["motion_override"]):
+                motion_override = self.conf_value("motion_override")
+                if (motion_override > self.conf_value("motion_threshold")) and (self.record["motion_value"] > motion_override) and not self.record["shows_train"]:
                     self.record["shows_train"] = True
-                    self.log.info(f'process: detected train on camera {self.can_num} by motion {self.record["motion_value"]}, override threshold: {self.conf_value("motion_override")}')
+                    self.log.info(f'process: detected train on camera {self.cam_num} by motion {self.record["motion_value"]}, override threshold: {motion_override}')
             except Exception as ex:
                 self.log.debug(f'process: camera {self.cam_num} failed to process motion override threshold: {str(ex)}')
 
-        #4 - Move files to archive destination, could be extended to become
-        #    configurable per camera (from config file)
+        # Validate if detection is considered valid - Validate motion
+        p_motion = self.conf_value("p_motion")
+
+        detection_valid = not p_motion or (p_motion and self.record["motion_detected"])
+
+        # Log detection for threshold evaluation
+        if self.record["shows_train"] and detection_valid:
+            self.log_detection()
+
+        # 1 - limit per hour
+        hour_cnt = self.detection_cnt(1)
+        hour_limit = self.conf_value("hour_limit", 20)
+        detection_valid = detection_valid and hour_cnt <= hour_limit
+
+        # 2 - limit per day
+        day_cnt = self.detection_cnt(24)
+        day_limit = self.conf_value("day_limit", 120)
+        detection_valid = detection_valid and day_cnt <= day_limit
+
+        self.record["detection_valid"] = detection_valid
+
+        self.log.debug(f'process: detection for camera {self.cam_num} is valid: {detection_valid}, based on: p_motion: {p_motion} and motion detected: {self.record["motion_detected"]}.')
+        self.log.info(f'process: detection for camera {self.cam_num} is valid: {detection_valid}, based on: hour count: {hour_cnt}, threshold: {hour_limit}; day count: {day_cnt}, threshold: {day_limit}')
+
+
+        # Move files to archive destination, could be extended to become
+        # configurable per camera (from config file)
         delete_no_train = self.conf_value('nr_enable') and not self.conf_value('nr_training') # or something similar...
         delete_jpg = False
 
         if self.conf_value('nr_enable') or self.conf_value('motion_enable'):
             self.archive_files(delete_no_train, delete_jpg, ignore_threshold = True)
 
-        # Evaluate if conditions to accept train are given
+
+        # Find nearby trains
         if not train_info:
             self.nearby_trains = []
             self.log.debug(f'process: no information about nearby trains available, not setting "nearby_trains"')
         else:
             lon = self.conf_value('longitude')
             lat = self.conf_value('latitude')
-            self.nearby_trains = train_info.nearby_trains(location=(lat, lon), max_dist = self.train_location_distance, max_age = self.train_location_timeout)
+            self.nearby_trains = train_info.nearby_trains(location=(lat, lon), max_dist = self.conf_value('train_location_distance', 800), max_age = self.conf_value('train_location_timeout', 120), min_speed = self.conf_value('train_location_speedlimit', 5))
 
-        # Validate if detection is considered valid
-        detection_valid = not self.conf_value("p_train") and not self.conf_value("p_motion") or (self.conf_value("p_train") and (len(self.nearby_trains) > 0)) or (self.conf_value("p_motion") and self.record["motion_detected"])
-        self.log.debug(f'process: detection for camera {self.cam_num} is valid: {detection_valid}, based on: p_train: {self.conf_value("p_train")} and {len(self.nearby_trains)} nearby trains, p_motion: {self.conf_value("p_motion")} and motion detected: {self.record["motion_detected"]}.')
 
         if not detection_valid and self.record["detection_count"] > 0:
             # reset detection count if detection is considered not valid
             self.record["detection_count"] = 0
             self.log.debug(f'process: resetting detection count, as detection not valid.')
 
-        # add info log about valid detection HERE
-
         # Store record and post on facebook
         if detection_valid and self.record["shows_train"]:
             # generate caption only if train detected
-            self.generate_caption(train_info)
+            self.generate_caption(train_info, include_carlist = True)
 
             # Evaluate if conditions for posting are given
 
@@ -1384,7 +1698,8 @@ class fb_helper:
 
         try:
             # Construct the Graph API endpoint URL for video uploads
-            endpoint_url = f"https://graph.facebook.com/v12.0/me/videos?access_token={train.fb_access_token}"
+            #endpoint_url = f"https://graph.facebook.com/v12.0/me/videos?access_token={train.fb_access_token}"
+            endpoint_url = f"https://graph.facebook.com/v21.0/me/videos?access_token={train.fb_access_token}"
 
             # Open the video file in binary mode
             with open(image_location, 'rb') as video_file:
@@ -1452,8 +1767,8 @@ class fb_helper:
             #post_video = False
 
             # disable video posting during night
-            if post_video and ((datetime.now().hour > 19) or (datetime.now().hour < 6)):
-                self.log.debug(f'publish_train: video posting disabled after 19h and before 6h.')
+            if post_video and ((datetime.now().hour >= 17) or (datetime.now().hour < 6)):
+                self.log.debug(f'publish_train: video posting disabled after 17h and before 6h.')
                 post_video = False
 
             # determine which file to use for posting
@@ -1605,7 +1920,7 @@ def main():
             log.error(f'Error setting up image captures of camera {cam_id}.')
 
     # initialize train location
-    train_info = train_location(agencies = ['via', 'exo'], static_gtfs_folder = os.path.join(root_folder, 'models', 'gtfs'))
+    train_info = train_location(agencies = ['via', 'exo', 'go'], static_gtfs_folder = os.path.join(root_folder, 'models', 'gtfs'))
 
     # capture data
     log.info('Start capturing process.')
