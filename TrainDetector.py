@@ -552,7 +552,7 @@ class train_location:
 
         return traincars
 
-    def nearby_trains(self, location = (0, 0), max_dist = -1, max_age = -1, min_speed = 1):
+    def nearby_trains(self, location = (0, 0), max_dist = -1, max_age = -1, min_speed = 0):
 
         # initialize empty train list
         nearby_trains = []
@@ -575,22 +575,26 @@ class train_location:
 
                 timedelta = datetime.now() - train_info['time']
 
+                max_dist_t = max_dist
+                max_age_t = max_age
                 if train_info['agency'].lower() == 'exo':
-                    max_dist = max(max_dist * 0.2, 600)
-                    max_age = max(max_age * 0.2, 60)
-                    self.log.debug(f'nearby_trains: for EXO train, reduced thresholds to: {max_dist} m and {max_age} s.')
+                    max_dist_t = max(max_dist * 0.2, 600)
+                    max_age_t = max(max_age * 0.2, 60)
+                    #self.log.debug(f'nearby_trains: for EXO train, reduced thresholds to: {max_dist_t} m and {max_age_t} s.')
 
                 # distance:
                 dst_est = self.calculate_distance(lat_cam, lon_cam, train_info['latitude_est'], train_info['longitude_est'])
                 dst = self.calculate_distance(lat_cam, lon_cam, train_info['latitude'], train_info['longitude'])
                 dst_str = str(round(dst)) # distance in m
 
+                str_train = f'{self.train_description(train_info)}, dst_est: {int(dst_est)}m [{max_dist_t}m] (from {int(dst)}m), age: {timedelta.seconds}s [{max_age_t}s], {train_info["speed"]}km/h [{min_speed}km/h].'
+
                 # check distance and time limit
-                if ((max_dist == -1) or (dst_est <= max_dist)) and ((max_age == -1) or (timedelta.seconds <= max_age)) and (train_info['speed'] >= min_speed):
+                if ((max_dist == -1) or (dst_est <= max_dist_t)) and ((max_age == -1) or (timedelta.seconds <= max_age_t)) and ((min_speed == 0) or (train_info['speed'] >= min_speed)):
                     nearby_trains.append(train_info)
-                    self.log.debug(f'nearby_trains: accepted train: {self.train_description(train_info)}, estimated distance: {int(dst_est)} m (from {int(dst)} m), age: {timedelta.seconds} s')
+                    self.log.debug(f'nearby_trains: accepted train: {str_train}')
                 else:
-                    self.log.debug(f'nearby_trains: rejected train: {self.train_description(train_info)}, estimated distance: {int(dst_est)} m (from {int(dst)} m), age: {timedelta.seconds} s')
+                    self.log.debug(f'nearby_trains: rejected train: {str_train}')
                     rejected_trains.append(train_info)
         except Exception as ex:
             self.log.error('nearby_trains: ' + str(ex))
@@ -636,6 +640,7 @@ class image_capture:
             'file_type': '',
             'shows_train': False,
             'detection_valid': False,
+            'time_limit_ok': True,
             'motion_value': 0,
             'motion_detected': False,
             'classified': False,
@@ -823,6 +828,7 @@ class image_capture:
     def conf_value(self, key, default_value = False):
 
         # initialise with default value
+        read_val = default_value
         ret_val = default_value
         use_config = {}
 
@@ -839,8 +845,7 @@ class image_capture:
             if key in use_config.keys():
                 read_val = use_config[key]
             else:
-                self.log.error(f'conf_value: key {key} does not exist.')
-                #read_val = default_value
+                self.log.warn(f'conf_value: key {key} does not exist, returning default value {default_value}.')
 
             # clean strings
             if isinstance(read_val, str):
@@ -952,7 +957,7 @@ class image_capture:
             self.record["file_type"] = 'jpg'
 
         elif self.conf_value('cam_type') == '511on':
-            cam_URL = f'https://511on.ca/map/Cctv/833{self.cam_num}'
+            cam_URL = f'https://511on.ca/map/Cctv/{self.cam_num}?t={int(datetime.now().timestamp())}'
             self.file_name = f'{self.base_file_name}.jpg'
             self.record["file_type"] = 'jpg'
 
@@ -966,29 +971,67 @@ class image_capture:
 
         input_file_path = os.path.join(self.root_folder, self.input_folder, self.file_name)
         try:
-            # open video file for writing
-            video_file = open(input_file_path, 'wb')
-
             # access video stream
-            response = requests.get(cam_URL, stream = True, verify = False)
+            response = requests.get(cam_URL, stream = True, verify = False, timeout = 5)
         except Exception as ex:
             self.log.error(f'acquire_camera_data: something went wrong downloading data from {cam_URL}: ' + str(ex))
             return False
 
-        # save video file
+        # save video or image file
         if response.ok:
-            try:
-                for block in response.iter_content(1024):
-                    if not block:
-                        break
-                    video_file.write(block)
-            except:
-                self.log.error(f'acquire_camera_data: could not save: {video_file.name}')
-                return False
-            #print(f'acquire_camera_data: written: {video_file.name}')
-            video_file.close()
+            if self.conf_value('cam_format') == 'mp4':
+                try:
+                    # open video file for writing
+                    video_file = open(input_file_path, 'wb')
+                    for block in response.iter_content(1024):
+                        if not block:
+                            break
+                        video_file.write(block)
+                    video_file.close()
+
+                except Exception as ex:
+                    self.log.error(f'acquire_camera_data: could not save: {video_file.name}. Exception: {str(ex)}')
+                    return False
+                #print(f'acquire_camera_data: written: {video_file.name}')
+            else:
+                try:
+                    # read downloaded image data
+                    img_array = np.asarray(bytearray(response.content), dtype=np.uint8)
+                    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                    cropped_img = img
+
+                    # insert code for cropping image here
+                    crop_coordinates_str = self.conf_value('img_crop', '')
+                    if len(crop_coordinates_str) > 5:
+                        try:
+                            crop_coordinates = tuple(map(int, crop_coordinates_str.strip("()").split(",")))
+
+                            if len(crop_coordinates) == 4:
+                                x_start, y_start, x_end, y_end = crop_coordinates
+                                height, width, _ = img.shape
+
+                                if 0 <= x_start < x_end <= width and 0 <= y_start < y_end <= height:
+                                    self.log.debug(f'acquire_camera_data: cropping {self.file_name} with {crop_coordinates_str}.')
+                                    cropped_img = img[y_start:y_end, x_start:x_end]
+                                else:
+                                    self.log.warn(f'acquire_camera_data: image area {self.file_name} of {width}x{height} is out of bounds from {crop_coordinates_str}.')
+                        except:
+                            cropped_img = img
+
+
+                    img_saved = cv2.imwrite(input_file_path, cropped_img)
+                    self.log.debug(f'acquire_camera_data: written {input_file_path}: {img_saved}. img_array size: {len(img_array)}.')
+
+                except Exception as ex:
+                    self.log.error(f'acquire_camera_data: could not save: {input_file_path}. Exception: {str(ex)}')
+                    return False
+
+                if not img_saved:
+                    self.log.error(f'acquire_camera_data: could not save: {input_file_path}.')
+                    return False
         else:
             self.log.error(f'acquire_camera_data: response not ok, response status code = {response.status_code}')
+            return False
 
         # check if downloaded data is new, compared to last data
         new_checksum = hashlib.md5(open(input_file_path, 'rb').read()).hexdigest()
@@ -997,7 +1040,7 @@ class image_capture:
         if self.new_data:
             self.last_data_checksum = new_checksum
             self.record["cnt_pic"] += 1
-            self.log.debug(f'acquire_camera_data: successfully saved: {video_file.name}')
+            self.log.debug(f'acquire_camera_data: successfully saved: {input_file_path}')
 
         else:
             #restore last file name
@@ -1007,7 +1050,7 @@ class image_capture:
             try:
                 os.remove(input_file_path)
             except Exception as ex:
-                self.log.error('acquire_camera_data: ' + str(ex))
+                self.log.error(f'acquire_camera_data: could not delete {input_file_path}: {str(ex)}')
 
         # update record with file path
         self.record["file_path"] = self.input_folder
@@ -1020,7 +1063,7 @@ class image_capture:
         full_file_name = os.path.join(self.root_folder, self.input_folder, self.file_name)
 
         if not os.path.isfile(full_file_name):
-            self.log.error('extract_frames: video file {full_file_name} does not exist.')
+            self.log.error(f'extract_frames: video file {full_file_name} does not exist.')
             return False
 
         self.image_file_names = []
@@ -1598,20 +1641,24 @@ class image_capture:
         if self.record["shows_train"] and detection_valid:
             self.log_detection()
 
+        time_limit_ok = True
+
         # 1 - limit per hour
         hour_cnt = self.detection_cnt(1)
         hour_limit = self.conf_value("hour_limit", 20)
-        detection_valid = detection_valid and hour_cnt <= hour_limit
+        time_limit_ok = hour_cnt <= hour_limit
 
         # 2 - limit per day
         day_cnt = self.detection_cnt(24)
         day_limit = self.conf_value("day_limit", 120)
-        detection_valid = detection_valid and day_cnt <= day_limit
+        time_limit_ok = time_limit_ok and day_cnt <= day_limit
 
         self.record["detection_valid"] = detection_valid
+        self.record["time_limit_ok"] = time_limit_ok
 
-        self.log.debug(f'process: detection for camera {self.cam_num} is valid: {detection_valid}, based on: p_motion: {p_motion} and motion detected: {self.record["motion_detected"]}.')
-        self.log.info(f'process: detection for camera {self.cam_num} is valid: {detection_valid}, based on: hour count: {hour_cnt}, threshold: {hour_limit}; day count: {day_cnt}, threshold: {day_limit}')
+        if self.record["shows_train"]:
+            self.log.debug(f'process: detection for camera {self.cam_num} is valid: {detection_valid}, based on: p_motion: {p_motion} and motion detected: {self.record["motion_detected"]}.')
+            self.log.info(f'process: detection for camera {self.cam_num} is in time limits: {time_limit_ok}, based on: hour count: {hour_cnt}, threshold: {hour_limit}; day count: {day_cnt}, threshold: {day_limit}')
 
 
         # Move files to archive destination, could be extended to become
@@ -1633,13 +1680,13 @@ class image_capture:
             self.nearby_trains = train_info.nearby_trains(location=(lat, lon), max_dist = self.conf_value('train_location_distance', 800), max_age = self.conf_value('train_location_timeout', 120), min_speed = self.conf_value('train_location_speedlimit', 5))
 
 
-        if not detection_valid and self.record["detection_count"] > 0:
+        if (not detection_valid and not self.record["shows_train"]) and (self.record["detection_count"] > 0):
             # reset detection count if detection is considered not valid
             self.record["detection_count"] = 0
-            self.log.debug(f'process: resetting detection count, as detection not valid.')
+            self.log.debug(f'process: resetting detection count for camera {self.cam_num}, as detection not valid.')
 
         # Store record and post on facebook
-        if detection_valid and self.record["shows_train"]:
+        if detection_valid and time_limit_ok and self.record["shows_train"]:
             # generate caption only if train detected
             self.generate_caption(train_info, include_carlist = True)
 
@@ -1654,6 +1701,8 @@ class image_capture:
 
             #6 keep record if a train was detected by the nr model or by motion detection
             self.store_record(ignore_threshold = False, to_csv = True, to_db = True)
+        elif self.record["shows_train"]:
+            self.log.info(f'process: not posting camera {self.cam_num}, datection valid: {detection_valid} and time limits ok: {time_limit_ok}.')
 
         return True
 
@@ -1917,7 +1966,7 @@ def main():
             cam_list.append(image_capture(root_folder = root_folder, input_root_folder = 'inbox', output_root_folder = 'results', cam_num = cam_id, configuration_file = configuration_file, fb_credential_file = fb_credential_file, db_file = database_file))
             log.info(f'Initializing camera {cam_id} completed.')
         except Exception as ex:
-            log.error(f'Error setting up image captures of camera {cam_id}.')
+            log.error(f'Error setting up image captures of camera {cam_id}: {str(ex)}.')
 
     # initialize train location
     train_info = train_location(agencies = ['via', 'exo', 'go'], static_gtfs_folder = os.path.join(root_folder, 'models', 'gtfs'))
@@ -1936,7 +1985,7 @@ def main():
                 except Exception as ex:
                     log.error(f'Error processing camera: {cam.cam_num}' + str(ex))
 
-            time.sleep(18)
+            time.sleep(25)
 
     except KeyboardInterrupt:
         pass
