@@ -21,6 +21,9 @@ import sys
 import sqlite3
 from google.transit import gtfs_realtime_pb2
 from collections import Counter
+from astral import LocationInfo
+from astral.sun import sun
+import pytz
 
 class train_location:
 
@@ -632,6 +635,8 @@ class image_capture:
         self.nearby_trains = []
         self.record = {
             'camera': self.cam_num,
+            'latitude': 0,
+            'longitude': 0,
             'date': '',
             'weekday': '',
             'time': '',
@@ -1165,7 +1170,7 @@ class image_capture:
                                 # set result to "train":
                                 self.record["shows_train"] = True
                                 self.record["cnt_train"] += 1
-                                self.record["detection_count"] += 1 # do net set here, but later when we know it's a *valid* detection
+                                #self.record["detection_count"] += 1 # do net set here, but later when we know it's a *valid* detection
                             else:
                                 # set result to "no train":
                                 self.record["shows_train"] = False
@@ -1594,6 +1599,9 @@ class image_capture:
         #0 - Reload configuration and re-load model if new version
         self.read_configuration()
 
+        self.record['latitude'] = self.conf_value('latitude')
+        self.record['longitude'] = self.conf_value('longitude')
+
         #0a - Load new model if different version obtained
         if self.conf_value('nr_version') != self.loaded_nr_version:
             self.nr_disable = False
@@ -1639,7 +1647,18 @@ class image_capture:
 
         # Log detection for threshold evaluation
         if self.record["shows_train"] and detection_valid:
-            self.log_detection()
+            self.log.debug(f'process: detection is valid, incrementing detection count and storing record.')
+            self.record["detection_count"] += 1
+
+            # log detection for use in hour and day counts for first detection; others are most likely the same train so do not log them:
+            if self.record["detection_count"] == 1:
+                self.log_detection()
+
+        # reset detection count if detection is considered not valid
+        if (not detection_valid and not self.record["shows_train"]) and (self.record["detection_count"] > 0):
+
+            self.record["detection_count"] = 0
+            self.log.debug(f'process: resetting detection count for camera {self.cam_num}, as detection not valid.')
 
         time_limit_ok = True
 
@@ -1669,24 +1688,18 @@ class image_capture:
         if self.conf_value('nr_enable') or self.conf_value('motion_enable'):
             self.archive_files(delete_no_train, delete_jpg, ignore_threshold = True)
 
-
-        # Find nearby trains
-        if not train_info:
-            self.nearby_trains = []
-            self.log.debug(f'process: no information about nearby trains available, not setting "nearby_trains"')
-        else:
-            lon = self.conf_value('longitude')
-            lat = self.conf_value('latitude')
-            self.nearby_trains = train_info.nearby_trains(location=(lat, lon), max_dist = self.conf_value('train_location_distance', 800), max_age = self.conf_value('train_location_timeout', 120), min_speed = self.conf_value('train_location_speedlimit', 5))
-
-
-        if (not detection_valid and not self.record["shows_train"]) and (self.record["detection_count"] > 0):
-            # reset detection count if detection is considered not valid
-            self.record["detection_count"] = 0
-            self.log.debug(f'process: resetting detection count for camera {self.cam_num}, as detection not valid.')
-
         # Store record and post on facebook
         if detection_valid and time_limit_ok and self.record["shows_train"]:
+
+            # Find nearby trains
+            if not train_info:
+                self.nearby_trains = []
+                self.log.debug(f'process: no information about nearby trains available, not setting "nearby_trains"')
+            else:
+                lon = self.conf_value('longitude')
+                lat = self.conf_value('latitude')
+                self.nearby_trains = train_info.nearby_trains(location=(lat, lon), max_dist = self.conf_value('train_location_distance', 800), max_age = self.conf_value('train_location_timeout', 120), min_speed = self.conf_value('train_location_speedlimit', 5))
+
             # generate caption only if train detected
             self.generate_caption(train_info, include_carlist = True)
 
@@ -1816,8 +1829,29 @@ class fb_helper:
             #post_video = False
 
             # disable video posting during night
-            if post_video and ((datetime.now().hour >= 17) or (datetime.now().hour < 6)):
-                self.log.debug(f'publish_train: video posting disabled after 17h and before 6h.')
+            try:
+                train_lat = train.record['latitude']
+                train_lon = train.record['longitude']
+                self.log.debug(f'publish_train: train position is: {train_lat}, {train_lon}')
+            except:
+                self.log.error(f'publish_train: train.record latitude and longitude are not set.')
+                train_lat = 45.5271
+                train_lon = -73.6049
+
+            city = LocationInfo(timezone = "America/Toronto", latitude = train_lat, longitude = train_lon)
+
+            # Get current time in the correct timezone
+            now = datetime.now(pytz.timezone(city.timezone))
+
+            # Get today's sunrise and sunset times
+            s = sun(city.observer, date = now)
+
+
+            # Compare current time to sunrise and sunset
+            is_night = (now < s['sunrise'] - timedelta(minutes=30)) or (now > s['sunset'] + timedelta(minutes=30))
+
+            if post_video and is_night:
+                self.log.debug(f'publish_train: video posting disabled at night. Now is {now}, sunrise: {s["sunrise"]}, sunset: {s["sunset"]}.')
                 post_video = False
 
             # determine which file to use for posting
@@ -1864,7 +1898,7 @@ class fb_helper:
                 self.log.error('publish_train: posting failed: ' + str(ex) + ' ret:' + str(ret))
                 ret = False
         else:
-            self.log.warning('publish_facebook: not posting, detection threshold exceeded.')
+            self.log.warning(f'publish_facebook: not posting, detection threshold exceeded. Count: {train.record["detection_count"]}, Threshold: {train.record["detection_threshold"]}')
             ret = False
 
         return ret
