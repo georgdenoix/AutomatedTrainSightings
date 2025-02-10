@@ -1634,7 +1634,7 @@ class image_capture:
             #3b - check if motion is high enough to override nr classification
             try:
                 motion_override = self.conf_value("motion_override")
-                if (motion_override > self.conf_value("motion_threshold")) and (self.record["motion_value"] > motion_override) and not self.record["shows_train"]:
+                if (motion_override > self.conf_value("motion_threshold")) and (abs(self.record["motion_value"]) > motion_override) and not self.record["shows_train"]:
                     self.record["shows_train"] = True
                     self.log.info(f'process: detected train on camera {self.cam_num} by motion {self.record["motion_value"]}, override threshold: {motion_override}')
             except Exception as ex:
@@ -1643,22 +1643,19 @@ class image_capture:
         # Validate if detection is considered valid - Validate motion
         p_motion = self.conf_value("p_motion")
 
-        detection_valid = not p_motion or (p_motion and self.record["motion_detected"])
+        detection_valid = self.record["shows_train"] and (not p_motion or (p_motion and self.record["motion_detected"]))
 
         # Log detection for threshold evaluation
-        if self.record["shows_train"] and detection_valid:
+        if detection_valid:
             self.log.debug(f'process: detection is valid, incrementing detection count and storing record.')
             self.record["detection_count"] += 1
 
             # log detection for use in hour and day counts for first detection; others are most likely the same train so do not log them:
             if self.record["detection_count"] == 1:
                 self.log_detection()
-
+        else:
         # reset detection count if detection is considered not valid
-        if (not detection_valid and not self.record["shows_train"]) and (self.record["detection_count"] > 0):
-
             self.record["detection_count"] = 0
-            self.log.debug(f'process: resetting detection count for camera {self.cam_num}, as detection not valid.')
 
         time_limit_ok = True
 
@@ -1682,19 +1679,21 @@ class image_capture:
 
         # Move files to archive destination, could be extended to become
         # configurable per camera (from config file)
-        delete_no_train = self.conf_value('nr_enable') and not self.conf_value('nr_training') # or something similar...
+        delete_no_train = self.conf_value('nr_enable') and not self.conf_value('nr_training')
         delete_jpg = False
 
         if self.conf_value('nr_enable') or self.conf_value('motion_enable'):
             self.archive_files(delete_no_train, delete_jpg, ignore_threshold = True)
 
         # Store record and post on facebook
-        if detection_valid and time_limit_ok and self.record["shows_train"]:
+        threshold_ok = (self.record["detection_count"] <= self.record["detection_threshold"])
+
+        if detection_valid and time_limit_ok and threshold_ok:
 
             # Find nearby trains
             if not train_info:
                 self.nearby_trains = []
-                self.log.debug(f'process: no information about nearby trains available, not setting "nearby_trains"')
+                self.log.debug(f'process: no information about nearby trains available, not setting "nearby_trains".')
             else:
                 lon = self.conf_value('longitude')
                 lat = self.conf_value('latitude')
@@ -1706,16 +1705,20 @@ class image_capture:
             # Evaluate if conditions for posting are given
 
             #5 - Post on facebook (need to do *before* storing record, to capture fb id)
-            if self.conf_value('fb_posting'):
-                ignore_threshold = False
-                self.fb.publish_train(self, ignore_threshold)
-            else:
-                self.log.debug(f'process: not posting {self.file_name}, not configured for fb posting.')
+            try:
+                if self.conf_value('fb_posting'):
+                    self.fb.publish_train(self)
+                else:
+                    self.log.debug(f'process: not posting {self.file_name}, not configured for fb posting.')
+            except Exception as ex:
+                self.log.error(f'process: facebook posting failed: {str(ex)}.')
 
             #6 keep record if a train was detected by the nr model or by motion detection
             self.store_record(ignore_threshold = False, to_csv = True, to_db = True)
         elif self.record["shows_train"]:
-            self.log.info(f'process: not posting camera {self.cam_num}, datection valid: {detection_valid} and time limits ok: {time_limit_ok}.')
+            self.log.info(f'process: not posting {self.file_name}, datection valid: {detection_valid}, time limits ok: {time_limit_ok}, threshold ok: {threshold_ok}.')
+        else:
+            self.log.debug(f'process: not posting {self.file_name}, no train detected.')
 
         return True
 
@@ -1792,7 +1795,7 @@ class fb_helper:
 
         return ret_val
 
-    def publish_train(self, train = False, ignore_threshold = False):
+    def publish_train(self, train = False):
         if not train:
             self.log.error('publish_train: no train object provided.')
             return False
@@ -1811,94 +1814,86 @@ class fb_helper:
         # initialize return
         ret = False
 
-        # determine if we should post at all
-        if (train.record["detection_count"] <= train.record["detection_threshold"]) or ignore_threshold:
-
-            # check if main file is a video file
-            try:
-                if train.file_name[-3:] == 'mp4':
-                    post_video = train.fb_video_inhibit < datetime.now()
-                    self.log.debug(f'publish_train: publishing video for camera {train.cam_num} is allowed: {post_video}; inhibited until: {train.fb_video_inhibit}.')
-                else:
-                    post_video = False
-            except:
-                post_video = False
-
-            # temporary measure...
-            #post_video = not train.fb_video_inhibit or (train.fb_video_inhibit < datetime.now())
-            #post_video = False
-
-            # disable video posting during night
-            try:
-                train_lat = train.record['latitude']
-                train_lon = train.record['longitude']
-                self.log.debug(f'publish_train: train position is: {train_lat}, {train_lon}')
-            except:
-                self.log.error(f'publish_train: train.record latitude and longitude are not set.')
-                train_lat = 45.5271
-                train_lon = -73.6049
-
-            city = LocationInfo(timezone = "America/Toronto", latitude = train_lat, longitude = train_lon)
-
-            # Get current time in the correct timezone
-            now = datetime.now(pytz.timezone(city.timezone))
-
-            # Get today's sunrise and sunset times
-            s = sun(city.observer, date = now)
-
-
-            # Compare current time to sunrise and sunset
-            is_night = (now < s['sunrise'] - timedelta(minutes=30)) or (now > s['sunset'] + timedelta(minutes=30))
-
-            if post_video and is_night:
-                self.log.debug(f'publish_train: video posting disabled at night. Now is {now}, sunrise: {s["sunrise"]}, sunset: {s["sunset"]}.')
-                post_video = False
-
-            # determine which file to use for posting
-            video_file_name = train.file_name
-            image_file_name = train.image_file_names[0]
-
-            # determine path to image file to be posted
-            source_folder = ''
-            if train.record["archived"]:
-                source_folder = train.output_folder_train
-            elif train.record["classified"]:
-                source_folder = train.input_folder
+        # check if main file is a video file
+        try:
+            if train.file_name[-3:] == 'mp4':
+                post_video = train.fb_video_inhibit < datetime.now()
+                self.log.debug(f'publish_train: publishing video for camera {train.cam_num} is allowed: {post_video}; inhibited until: {train.fb_video_inhibit}.')
             else:
-                self.log.warning(f'publish_train: image {image_file_name} is neither classified nor archived, so cannot post it.')
-                return False
+                post_video = False
+        except:
+            post_video = False
 
-            image_location = os.path.join(train.root_folder, source_folder, image_file_name)
-            video_location = os.path.join(train.root_folder, source_folder, video_file_name)
+        # temporary measure...
+        #post_video = not train.fb_video_inhibit or (train.fb_video_inhibit < datetime.now())
+        #post_video = False
 
-            # Construct message for posting
-            message_content = train.record["caption"]
+        # disable video posting during night
+        try:
+            train_lat = train.record['latitude']
+            train_lon = train.record['longitude']
+            self.log.debug(f'publish_train: train position is: {train_lat}, {train_lon}')
+        except:
+            self.log.error(f'publish_train: train.record latitude and longitude are not set.')
+            train_lat = 45.5271
+            train_lon = -73.6049
 
-            # initialize return
-            ret = False
-            photo_id = 0
-            photo_url = "(not posted)"
+        city = LocationInfo(timezone = "America/Toronto", latitude = train_lat, longitude = train_lon)
 
-            # Publish image or video
-            try:
-                # determine to post photo or video
-                if post_video:
-                    # post video
-                    if not self.publish_video(train, video_location, message_content):
-                        # inhibit positing video for 12h, then try again
-                        self.log.error(f'publish_train: video posting for camera {train.cam_num} failed, inhibiting and trying to post picture instead.')
-                        train.set_video_post_inhibit()
+        # Get current time in the correct timezone
+        now = datetime.now(pytz.timezone(city.timezone))
+        # Get today's sunrise and sunset times
+        s = sun(city.observer, date = now)
 
-                        self.publish_photo(train, image_location, message_content)
+        # Compare current time to sunrise and sunset
+        is_night = (now < s['sunrise'] - timedelta(minutes = 45)) or (now > s['sunset'] + timedelta(minutes = 45))
 
-                else:
+        if post_video and is_night:
+            self.log.debug(f'publish_train: video posting disabled at night. Now is {now}, sunrise: {s["sunrise"]}, sunset: {s["sunset"]}.')
+            post_video = False
+
+        # determine which file to use for posting
+        video_file_name = train.file_name
+        image_file_name = train.image_file_names[0]
+
+        # determine path to image file to be posted
+        source_folder = ''
+        if train.record["archived"]:
+            source_folder = train.output_folder_train
+        elif train.record["classified"]:
+            source_folder = train.input_folder
+        else:
+            self.log.warning(f'publish_train: image {image_file_name} is neither classified nor archived, so cannot post it.')
+            return False
+
+        image_location = os.path.join(train.root_folder, source_folder, image_file_name)
+        video_location = os.path.join(train.root_folder, source_folder, video_file_name)
+
+        # Construct message for posting
+        message_content = train.record["caption"]
+
+        # initialize return
+        ret = False
+        photo_id = 0
+        photo_url = "(not posted)"
+
+        # Publish image or video
+        try:
+            # determine to post photo or video
+            if post_video:
+                # post video
+                if not self.publish_video(train, video_location, message_content):
+                    # inhibit positing video for 12h, then try again
+                    self.log.error(f'publish_train: video posting for camera {train.cam_num} failed, inhibiting and trying to post picture instead.')
+                    train.set_video_post_inhibit()
+
                     self.publish_photo(train, image_location, message_content)
 
-            except Exception as ex:
-                self.log.error('publish_train: posting failed: ' + str(ex) + ' ret:' + str(ret))
-                ret = False
-        else:
-            self.log.warning(f'publish_facebook: not posting, detection threshold exceeded. Count: {train.record["detection_count"]}, Threshold: {train.record["detection_threshold"]}')
+            else:
+                self.publish_photo(train, image_location, message_content)
+
+        except Exception as ex:
+            self.log.error('publish_train: posting failed: ' + str(ex) + ' ret:' + str(ret))
             ret = False
 
         return ret
@@ -2017,7 +2012,7 @@ def main():
                 try:
                     cam.process(train_info)
                 except Exception as ex:
-                    log.error(f'Error processing camera: {cam.cam_num}' + str(ex))
+                    log.error(f'Error processing camera {cam.cam_num}: ' + str(ex))
 
             time.sleep(25)
 
