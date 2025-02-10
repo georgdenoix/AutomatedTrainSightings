@@ -1,37 +1,63 @@
-﻿cam_id,cam_type,cam_description,latitude,longitude,cam_format,fb_posting,nr_enable,nr_version,nr_training,nr_mask,motion_enable,mask,p_motion,p_train,disable_capture,right_orientation,left_orientation,motion_threshold,motion_override
-121,vdo,Sheffield - Sub. Alexandria,0,0,jpg,,x,0,x,,,,,,x,,,,
-133,vdo,"ANR Renfrew MP 2 (Kanata, ON)",45.338682,-75.911689,jpg,,,,,,,,,,x,,,,
-148,vdo,VIA Smiths Falls MP 4 (Fallowfield),45.29544,-75.73914,jpg,,x,21,x,,,,,,x,,,,
-51,vdm,CP Outremont Spur (Beaubien / Parc),45.526269,-73.611411,jpg,,,,,,,,,,x,,,,
-81,vdm,CP Parc Sub (Jarry / Querbes),45.533258,-73.634574,jpg,,,,,,,,,,x,,,,
-119,vdm,CN St-Hyacinthe MP 72 (Pont Victoria),0,0,jpg,,,,,,,,,,x,,,,
-144,vdm,CP Parc Sub (Beaumont / Parc),45.528896,-73.617266,jpg,x,x,1,x,x,,x,,,,,,,0
-180,vdm,CN St-Laurent (Ahuntsic),45.534985,-73.662703,jpg,,x,11,x,x,,x,,,,,,,0
-212,vdm,CN Wharf Spur,0,0,jpg,x,x,20,x,x,,x,,,,,,,0
-258,vdm,CP Outremont Spur (Bellechasse/St-Laurent),0,0,jpg,x,x,0,x,x,,x,,,,,,,0
-268,vdm,"CP Adirondack MP 49, Wilderton crossing (Montréal)",45.51341,-73.63146,jpg,,x,20,x,,,,,,,,,,0
-335,vdm,CN St-Laurent MP 130.5 (RDP),45.65914,-73.541677,jpg,x,x,7,x,x,,x,,,,,,,0
-458,vdm,CN St-Laurent (Pie IX),0,0,jpg,,,,,,,,,,x,,,,
-467,vdm,CP Outremont Spur (St-Grégoire/Papineau),0,0,jpg,,,,,,,,,,x,,,,
-505,vdm,CN Longue-Pointe,0,0,jpg,,,,,,,,,,x,,,,
-513,vdm,CP Outremont Spur (Port),0,0,jpg,,,,,,,,,,x,,,,
-3319,511,"CN Kingston MP 19, CP Vaudreuil MP 14 (Beaconsfield)",45.41829,-73.91698,mp4,x,x,10,x,x,x,x,x,x,,East,West,5,0
-3326,511,"CN Rouses Point MP 37.5 (Brossard, Aut. 10 at boul. Leduc)",45.45610644,-73.44631453,mp4,x,x,5,x,x,x,x,x,,,South,North,5,0
-3351,511,CN St-Hyacinthe MP 69.5 (Saint-Lambert),45.504298,-73.488868,mp4,x,x,13,x,x,x,x,x,x,,East,West,5,0
-3362,511,CP Adirondack MP 43.5 (Lachine),45.44234,-73.65454,mp4,x,x,10,x,x,x,x,,,,North,South,5,0
-3365,511,CN Montreal MP 9 (Lachine),45.44757,-73.68339,mp4,x,x,19,x,x,x,x,x,x,,East,West,5,0
-3367,511,"CN Montreal MP 10.5, CP Vaudreuil MP 4 (Lachine)",45.4482,-73.7176,mp4,x,x,21,x,x,x,x,x,x,,East,West,10,0
-3371,511,"CN Kingston MP 11.5, CP Vaudreuil MP 6 (Gare Pine Beach)",45.44888,-73.76682,mp4,x,x,12,x,x,x,x,x,x,,East,West,5,0
-3373,511,"CN Kingston MP 21.5, CP Vaudreuil MP 16 (Sainte-Anne-de-Bellevue)",45.40522,-73.9535,mp4,x,x,5,x,x,x,x,,,,East,West,5,0
-3375,511,"CN Kingston, Aut. 20 (Dorion)",0,0,mp4,,,,x,,,,,,x,East,West,5,
-3378,511,CN St-Hyacinthe MP 72 (Pont Victoria),45.48704,-73.54208,mp4,x,x,22,x,x,x,x,x,,,East,West,32,0
-3379,511,CN St-Hyacinthe,0,0,mp4,,,,,,,,,,x,,,,
-3380,511,"CN St-Hyacinthe MP 71 (Saint-Lambert, Aut. 20 at Pont Victoria)",45.496627,-73.514624,mp4,x,x,1,x,x,x,x,,,,East,West,3,0
-3399,511,CP Vaudreuil MP 3 (Lachine),45.44886,-73.69731,mp4,x,x,14,x,,x,x,x,x,,East,West,5,0
-3532,511,"CN Bridge MP 13 (Quebec, Aut. 973 at rue Soumande)",46.82647848,-71.25417826,mp4,x,x,2,x,,,,,,,,,,0
-3549,511,Aut. 20 (eastward) at route Lagueux,0,0,mp4,,,,x,,,,,,x,,,,
-3574,511,CN Bridge MP 7.8 (Quebec Aut. 540 at boul. du Versant-Nord),46.7775224,-71.33102279,mp4,x,x,2,x,x,x,x,,,,West,East,5,0
-3743,511,"CN Bridge MP 2 (Levis, Route 175 at pont de Québec)",46.743469,-71.286654,mp4,x,x,2,x,x,x,x,,,,North,South,,0
-3814,511,"CN Montreal, Aut. 20 at boul. Angrignon (Turcot Ouest)",45.454477,-73.628514,mp4,,x,1,x,x,x,x,x,x,,East,West,5,0
-3830,511,"CN Montreal, Route 136 at Echangeur Turcot (East)",45.467183,-73.602558,mp4,x,x,7,x,x,x,x,x,x,,East,West,4,0
-3899,511,"CP Vaudreuil MP 4.5, CN Montreal MP 11 (Dorval)",45.44958,-73.7377,mp4,x,x,16,x,x,x,x,x,x,,West,East,15,40
+﻿cam_id,cam_type,cam_description,latitude,longitude,cam_format,fb_posting,nr_enable,nr_version,nr_training,nr_mask,motion_enable,mask,p_motion,disable_capture,right_orientation,left_orientation,motion_threshold,motion_override,train_location_timeout,train_location_speedlimit,train_location_distance,hour_limit,day_limit,img_crop
+51,vdm,CP Outremont Spur (Beaubien / Parc),45.526269,-73.611411,jpg,,,,,,,,,x,,,,,,,,,,
+81,vdm,CP Parc Sub (Jarry / Querbes),45.533258,-73.634574,jpg,,,,,,,,,x,,,,,,,,,,
+119,vdm,CN St-Hyacinthe MP 72 (Pont Victoria),0,0,jpg,,,,,,,,,x,,,,,,,,,,
+121,vdo,Sheffield - Sub. Alexandria,0,0,jpg,,,0,,,,,,x,,,,,,,,,,
+133,vdo,ANR Renfrew MP 2 (Kanata ON),45.338682,-75.911689,jpg,,,,,,,,,x,,,,,,,,,,
+144,vdm,CP Parc Sub (Beaumont / Parc),45.528896,-73.617266,jpg,,,2,,x,,x,,x,,,,,,,,,,
+148,vdo,VIA Smiths Falls MP 4 (Fallowfield),45.29544,-75.73914,jpg,,x,34,x,,,,,,,,,,340,0,2400,3,12,
+180,vdm,CN St-Laurent (Ahuntsic),45.534985,-73.662703,jpg,,,11,,x,,x,,x,,,,,,,,,,
+212,vdm,CN Wharf Spur,45.499877,-73.552533,jpg,,,20,,x,,x,,x,,,,,,,,,,
+258,vdm,CP Outremont Spur (Bellechasse/St-Laurent),45.528352,-73.604354,jpg,,,0,,x,,x,,x,,,,,,,,,,
+268,vdm,CP Adirondack MP 49  Wilderton crossing (Montréal),45.51341,-73.63146,jpg,,,20,,,,,,x,,,,,,,,,,
+335,vdm,CN St-Laurent MP 130.5 (RDP),45.65914,-73.541677,jpg,,,8,,x,,x,,x,,,,,,,,,,
+458,vdm,CN St-Laurent (Pie IX),0,0,jpg,,,,,,,,,x,,,,,,,,,,
+467,vdm,CP Outremont Spur (St-Grégoire/Papineau),0,0,jpg,,,,,,,,,x,,,,,,,,,,
+505,vdm,CN Longue-Pointe,0,0,jpg,,,,,,,,,x,,,,,,,,,,
+513,vdm,CP Outremont Spur (Port),0,0,jpg,,,,,,,,,x,,,,,,,,,,
+729,511on,Kingston Sub; 401 near Liverpool Rd.,43.826386,-79.09663,jpg,x,x,7,x,,,,,,,,,,,,,4,60,"(0, 0, 464, 240)"
+833,511on,*Test* CP Belleville Sub,,,jpg,,x,2,x,,,,,,,,,,,,,,,"(284, 0, 704, 196)"
+870,511on,*Test* CP Vaughn Intermodal terminal lead track,,,jpg,,x,4,x,,,,,,,,,,,,,3,12,"(0, 0, 608, 256)"
+1382,511on,*Test* ,,,jpg,,,1,x,,,,,,,,,,,,,,,"(0, 0, 608, 256)"
+1501,511on,*Test* CP Belleville/North Toronto,,,jpg,,x,4,,,,,,x,,,,,,,,1,12,"(256, 0, 1280, 384)"
+3291,511,QGRY Trois-Rivières MP 81.5  Aut. 40 at rue du Père-Daniel,46.336875,-72.562623,mp4,x,x,5,x,x,x,x,x,,West,East,1,,,,,1,5,
+3310,511,QGRY Trois-Rivières MP 79.5  Aut. 55 at aut. 40,46.324247,-72.590471,mp4,,,,,,,,,x,,,5,,,,,,,
+3319,511,CN Kingston MP 19  CP Vaudreuil MP 14 (Beaconsfield),45.41829,-73.91698,mp4,x,x,17,x,x,x,x,x,,East,West,10,50,280,5,3900,10,60,
+3326,511,CN Rouses Point MP 37.5 (Brossard  Aut. 10 at boul. Leduc),45.45610644,-73.44631453,mp4,x,x,8,x,x,x,x,x,,South,North,15,,,5,,10,60,
+3351,511,CN St-Hyacinthe MP 69.5 (Saint-Lambert),45.504298,-73.488868,mp4,,,13,x,x,x,x,x,,East,West,5,,,,,,,
+3362,511,CP Adirondack MP 43.5 (Lachine),45.44234,-73.65454,mp4,x,x,18,x,x,x,x,x,,North,South,5,,,5,,1,10,
+3365,511,CN Montreal MP 9 (Lachine),45.44757,-73.68339,mp4,x,x,29,x,x,x,x,x,,East,West,5,,280,5,3500,10,120,
+3367,511,CN Montreal MP 10.5 CP Vaudreuil MP 4 (Lachine),45.4482,-73.7176,mp4,x,x,27,x,x,x,x,x,,East,West,10,,280,5,3000,10,120,
+3368,511,CP Vaudreuil MP 4.5 CN Montreal MP 11 (Dorval),45.448999,-73.730203,mp4,x,x,3,x,x,x,x,x,,East,West,5,,280,2,3500,10,120,
+3371,511,CN Kingston MP 11.5 CP Vaudreuil MP 6 (Gare Pine Beach),45.44888,-73.76682,mp4,x,x,28,x,x,x,x,x,,East,West,5,80,280,0,5200,2,120,
+3373,511,CN Kingston MP 21.5 CP Vaudreuil MP 16 (Sainte-Anne-de-Bellevue),45.40522,-73.9535,mp4,x,x,9,x,x,x,x,x,,East,West,2,,280,5,4200,10,120,
+3375,511,CN Kingston Aut. 20 (Dorion),0,0,mp4,,,,x,,,,,,East,West,5,,,,,,,
+3378,511,CN St-Hyacinthe MP 72 (Pont Victoria),45.48704,-73.54208,mp4,x,x,27,x,x,x,x,x,,East,West,29,,280,5,1000,8,120,
+3379,511,CN St-Hyacinthe,0,0,mp4,,,,,,,,,x,,,,,,,,,,
+3380,511,CN St-Hyacinthe MP 71 (Saint-Lambert  Aut. 20 at Pont Victoria),45.496627,-73.514624,mp4,x,x,14,x,x,x,x,,,East,West,2,,280,5,2500,10,120,
+3388,511,CN Rouses Point MP 78.5  Route 132 at ch. Saint-François-Xavier,45.378838,-73.529647,mp4,,,,,,,,,x,,,5,,,,,,,
+3399,511,CP Vaudreuil MP 3 (Lachine),45.44886,-73.69731,mp4,x,x,21,x,x,x,x,x,,East,West,50,,,5,,10,120,
+3532,511,CN Bridge MP 13 (Quebec Aut. 973 at rue Soumande),46.82647848,-71.25417826,mp4,x,x,8,x,x,x,x,x,,West,East,10,,280,5,1800,10,120,
+3549,511,Aut. 20 (eastward) at route Lagueux,0,0,mp4,,,,x,,,,,,,,,,,,,,,
+3549,511,CN Drummondville MP 12.5 (Aut 20 Rt Lagueux),46.676432,-71.346295,mp4,,,,,,,,,x,,,5,,,,,,,
+3574,511,CN Bridge MP 7.8 (Quebec Aut. 540 at boul. du Versant-Nord),46.7775224,-71.33102279,mp4,x,x,4,x,x,x,x,,,West,East,5,,280,5,1800,10,120,
+3718,511,CN St-Laurent MP 141.3  Aut. 15 (northward) at boul. de la Côte-Vertu,45.530753,-73.665166,mp4,x,x,2,x,x,x,x,x,,North,South,95,350,280,5,2500,10,120,
+3733,511,CN St-Laurent MP 129  Aut. 40 at the CN overpass,45.671837,-73.519368,mp4,,,,,,,,,x,,,5,,,,,,,
+3743,511,CN Bridge MP 2 (Levis Route 175 at pont de Québec),46.743469,-71.286654,mp4,x,x,5,x,x,x,x,x,,North,South,3,20,342,5,2500,10,120,
+3814,511,CN Montreal  Aut. 20 at boul. Angrignon (Turcot Ouest),45.454477,-73.628514,mp4,,,1,x,x,x,x,x,,East,West,5,,,,,,,
+3828,511,,,,mp4,,,,x,,,,,,,,,,,,,,,
+3830,511,CN Montreal  Route 136 at Echangeur Turcot (East),45.467183,-73.602558,mp4,x,x,12,x,x,x,x,x,,East,West,4,,280,5,3000,10,120,
+3896,511,CN Drummondville MP 12.5  Aut 20 Rt Lagueux,46.676432,-71.346295,mp4,,,6,x,x,x,x,x,,West,East,2,6,342,5,1200,1,10,
+3899,511,CP Vaudreuil MP 4.5 CN Montreal MP 11 (Dorval),45.44958,-73.7377,mp4,x,x,19,x,x,x,x,x,,West,East,9,35,280,5,3000,10,120,
+3952,511,Reseau Charlevoix MP 19  Route 138 at rue Gagnon (Ste-Anne-de-Beaupré),47.012885,-70.951233,mp4,,,,x,,,,,,,,5,,,,,,,
+9101,tro,GO Bala Sub MP 2.2 at Dundas St,43.663178,-79.356319,jpg,,,,,,,,,x,,,,,280,0,1200,,,
+9113,tro,GO Bala Sub MP 9.3 at CP Rail Bridge,43.734179,-79.331562,jpg,,,,,,,,,x,,,,,280,0,1200,,,
+9201,tro,GO Kingston MP 333 at Cherry St / Parliament St,43.648536,-79.360704,jpg,x,x,8,x,x,,,,,,,,,280,0,600,8,55,
+9208,tro,GO Oakville MP 2.2 at Dufferin St,43.634768,-79.423451,jpg,,x,4,x,x,,,,,,,,,280,0,1200,3,24,
+9209,tro,*Test* GO Oakville MP 3 at Dowling Ave,43.634791,-79.43819,jpg,,,6,x,x,,,,,,,,,280,0,1200,6,24,
+9210,tro,GO Oakville MP 3.5 at Parkside Dr,43.638688,-79.449204,jpg,x,x,9,x,x,,,,,,,,,280,0,1200,2,24,
+9211,tro,GO Oakville MP 4.5 at Ellis Ave,43.638183,-79.463521,jpg,x,x,2,x,x,,,,,,,,,280,0,1200,6,32,
+9212,tro,GO Oakville MP 4.8 at South Kingsway,43.635978,-79.469164,jpg,x,x,6,x,x,,,,,,,,,280,0,1200,3,24,
+9213,tro,GO Oakville MP 5.2 at Palace Pier Crt,43.632569,-79.475601,jpg,,,,,,,,,x,,,,,280,0,1200,,,
+9214,tro,GO Oakville MP 5.5 at Park Lawn Rd / Rail Corridor Underpass,43.628397,-79.481152,jpg,,,,,,,,,x,,,,,280,0,1200,,,
+9319,tro,GO Oakville MP 4.9 at Lake Shore Blvd W & Palace Pier Crt,43.634641,-79.472223,jpg,x,x,3,x,x,,,,,,,,,280,0,1200,5,24,
