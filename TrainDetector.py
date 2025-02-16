@@ -717,6 +717,11 @@ class image_capture:
     def load_model(self):
         nr_version = self.conf_value('nr_version')
         model_file_name = ''
+        model_file_name_keras = ''
+        loaded_model = ''
+        #self.loaded_nr_version = -1
+        self.nr_model = False
+        self.nr_disable = True
 
         # Load model when configured version larger than previously loaded version
         if self.conf_value('nr_enable') and nr_version != self.loaded_nr_version:
@@ -724,25 +729,37 @@ class image_capture:
             try:
                 model_version = int(nr_version)
                 model_file_name = os.path.join(self.root_folder, 'models', 'neural networks', f'cam{self.cam_num}_model_v{model_version}.h5')
+                model_file_name_keras = os.path.join(self.root_folder, 'models', 'neural networks', f'cam{self.cam_num}_model_v{model_version}.keras')
             except Exception as ex:
-                self.loaded_nr_version = -1
-                self.nr_model = False
-                self.nr_disable = True
                 self.log.error(f'load_model: Could not determine model version:' + str(ex))
+                return False
 
             try:
-                self.nr_model = load_model(model_file_name)
+                if os.path.isfile(model_file_name_keras):
+                    self.nr_model = load_model(model_file_name_keras)
+                    loaded_model = model_file_name_keras
+
+                elif os.path.isfile(model_file_name):
+                    self.nr_model = load_model(model_file_name)
+                    loaded_model = model_file_name
+
+                else:
+                    self.log.error(f'load_model: Could not load model {model_file_name_keras} or {model_file_name}, none of them exists.')
+                    return False
+
+                self.nr_disable = False
                 self.loaded_nr_version = nr_version
-                self.log.info(f'load_model: successfully loaded {model_file_name} for camera {self.cam_num}.')
+                self.log.info(f'load_model: successfully loaded {loaded_model} for camera {self.cam_num}.')
             except Exception as ex:
                 # disable classification if loading model failed
                 self.nr_model = False
                 self.nr_disable = True
                 self.log.error(f'load_model: Could not load model {model_file_name}:' + str(ex))
+                return False
         else:
             self.log.debug(f'load_model: Loading model skipped for cam {self.cam_num}.')
-            self.nr_disable = True
-            self.nr_model = False
+
+        return True
 
     # set the root folder for all further operations
     def set_root_folder(self, folder_name = ''):
@@ -1626,6 +1643,8 @@ class image_capture:
         #2b - Determine if it shows a train
         if not self.nr_disable and self.conf_value('nr_enable'):
             self.classify_nr()
+        else:
+            self.log.debug(f'process: nr is disabled for camera {self.cam_num}.')
 
         #3 - Determine motion direction
         if self.conf_value('motion_enable'):
