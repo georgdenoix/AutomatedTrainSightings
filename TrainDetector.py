@@ -221,6 +221,16 @@ class train_location:
             ## Specific to VIA:
             if (train_info['agency'] == 'via'):
 
+                if 'delay' in train_info:
+                    try:
+                        if train_info['delay'] < 5:
+                            train_str += ', on time'
+                        else:
+                            train_str += f', delayed {train_info["delay"]} minutes'
+                    except Exception as ex:
+                        self.log.error('train_description: ' + str(ex))
+                        pass
+
                 # Add equipment detail
                 if include_carlist:
                     #self.log.debug(f'train_description: requesting car list.')
@@ -236,6 +246,20 @@ class train_location:
             self.log.error('train_description: ' + str(ex))
 
         return train_str
+
+    def get_delay(self, feed, vehicle_id, stop_id):
+        arrival_delay = 0
+        try:
+            for schedule in feed.entity:
+                if schedule.HasField("id"):
+                    if schedule.id == vehicle_id:
+                        if schedule.HasField("trip_update"):
+                            for stop_time_update in schedule.trip_update.stop_time_update:
+                                if stop_time_update.stop_id == stop_id:
+                                    arrival_delay = int(stop_time_update.arrival.delay / 60)
+        except Exception as ex:
+            self.log.error(f"get_delay: " + str(ex))
+        return arrival_delay
 
     # generic function to get trains from all agencies
     def read_trains(self, agencies = []):
@@ -304,6 +328,15 @@ class train_location:
 
                     ## get vehicle ID (engine no. for some agencies)
                     train_info['vehicle_id'] = vehicle.vehicle.id
+
+                    # get id of next stop
+                    if vehicle.HasField('stop_id'):
+                        train_info['next_stop_id'] = vehicle.stop_id
+                    else:
+                        train_info['next_stop_id'] = 0
+
+                    # get schedule delay
+                    train_info['delay'] = self.get_delay(vehicles, vehicle.vehicle.id, vehicle.stop_id)
 
                     # strip "AMT" prefix if present:
                     if len(train_info['vehicle_id']) > 3:
@@ -715,7 +748,7 @@ class image_capture:
         self.log.info(f'image_capture (init): copleted configuration of camera {self.cam_num}')
 
     def load_model(self):
-        nr_version = self.conf_value('nr_version')
+        nr_version = self.conf_value('nr_version') # read model version from configuration file
         model_file_name = ''
         model_file_name_keras = ''
         loaded_model = ''
@@ -723,41 +756,50 @@ class image_capture:
         self.nr_model = False
         self.nr_disable = True
 
+        self.log.debug(f'load_model: camera {self.cam_num}, nr_disable: {self.nr_disable}, current loaded model version: {self.loaded_nr_version}, configuration file: {nr_version}.')
+
         # Load model when configured version larger than previously loaded version
-        if self.conf_value('nr_enable') and nr_version != self.loaded_nr_version:
-            self.log.info(f'load_model: Loading new model for camera {self.cam_num}; new version: {nr_version}, previous: {self.loaded_nr_version}')
-            try:
-                model_version = int(nr_version)
-                model_file_name = os.path.join(self.root_folder, 'models', 'neural networks', f'cam{self.cam_num}_model_v{model_version}.h5')
-                model_file_name_keras = os.path.join(self.root_folder, 'models', 'neural networks', f'cam{self.cam_num}_model_v{model_version}.keras')
-            except Exception as ex:
-                self.log.error(f'load_model: Could not determine model version:' + str(ex))
-                return False
+        if self.conf_value('nr_enable'):
+            # Check if there is a newer model version in the models folder
+            next_version = self.loaded_nr_version + 1
+            if os.path.isfile(os.path.join(self.root_folder, 'models', 'neural networks', f'cam{self.cam_num}_model_v{next_version}.h5')):
+                nr_version = next_version
+                self.log.info(f'load_model: Found new model for camera {self.cam_num}; new version: {nr_version}, previous: {self.loaded_nr_version}')
 
-            try:
-                if os.path.isfile(model_file_name_keras):
-                    self.nr_model = load_model(model_file_name_keras)
-                    loaded_model = model_file_name_keras
-
-                elif os.path.isfile(model_file_name):
-                    self.nr_model = load_model(model_file_name)
-                    loaded_model = model_file_name
-
-                else:
-                    self.log.error(f'load_model: Could not load model {model_file_name_keras} or {model_file_name}, none of them exists.')
+            if nr_version != self.loaded_nr_version:
+                self.log.info(f'load_model: Loading new model for camera {self.cam_num}; new version: {nr_version}, previous: {self.loaded_nr_version}')
+                try:
+                    model_version = int(nr_version)
+                    model_file_name = os.path.join(self.root_folder, 'models', 'neural networks', f'cam{self.cam_num}_model_v{model_version}.h5')
+                    model_file_name_keras = os.path.join(self.root_folder, 'models', 'neural networks', f'cam{self.cam_num}_model_v{model_version}.keras')
+                except Exception as ex:
+                    self.log.error(f'load_model: Could not determine model version:' + str(ex))
                     return False
 
-                self.nr_disable = False
-                self.loaded_nr_version = nr_version
-                self.log.info(f'load_model: successfully loaded {loaded_model} for camera {self.cam_num}.')
-            except Exception as ex:
-                # disable classification if loading model failed
-                self.nr_model = False
-                self.nr_disable = True
-                self.log.error(f'load_model: Could not load model {model_file_name}:' + str(ex))
-                return False
-        else:
-            self.log.debug(f'load_model: Loading model skipped for cam {self.cam_num}.')
+                try:
+                    if os.path.isfile(model_file_name_keras):
+                        self.nr_model = load_model(model_file_name_keras)
+                        loaded_model = model_file_name_keras
+
+                    elif os.path.isfile(model_file_name):
+                        self.nr_model = load_model(model_file_name)
+                        loaded_model = model_file_name
+
+                    else:
+                        self.log.error(f'load_model: Could not load model {model_file_name_keras} or {model_file_name}, none of them exists.')
+                        return False
+
+                    self.nr_disable = False
+                    self.loaded_nr_version = nr_version
+                    self.log.info(f'load_model: successfully loaded {loaded_model} for camera {self.cam_num}.')
+                except Exception as ex:
+                    # disable classification if loading model failed
+                    self.nr_model = False
+                    self.nr_disable = True
+                    self.log.error(f'load_model: Could not load model {model_file_name}:' + str(ex))
+                    return False
+            else:
+                self.log.debug(f'load_model: Loading model skipped for cam {self.cam_num}, no new model version present.')
 
         return True
 
@@ -1137,43 +1179,48 @@ class image_capture:
                     if not self.record["shows_train"]:
 
                         img_path = os.path.join(self.root_folder, self.input_folder, img_file)
+                        full_mask_file_name = os.path.join(self.root_folder, 'models', 'masks', f'{self.cam_num}_mask.png')
 
                         # if a mask is used for this camera, apply and store temporary copy
-                        if self.conf_value('nr_mask'):
+                        if self.conf_value('nr_mask') and os.path.isfile(full_mask_file_name) and os.path.isfile(img_path):
+
+                            # apply mask and save in temporary destination
 
                             # determine image width
                             image_height, image_width, image_channels = cv2.imread(img_path).shape
-
                             # read mask for selected camera
-                            full_mask_file_name = os.path.join(self.root_folder, 'models', 'masks', f'{self.cam_num}_mask.png')
                             mask = imutils.resize(cv2.imread(full_mask_file_name, 0), width = image_width, height = image_height)
 
-                            # apply mask and save in temporary destination
-                            if os.path.isfile(img_path):
-                                img = cv2.imread(img_path)
+                            img = cv2.imread(img_path)
 
-                                try:
-                                    # create massked image
-                                    masked_image = cv2.bitwise_and(img, img, mask = mask)
+                            try:
+                                # create massked image
+                                masked_image = cv2.bitwise_and(img, img, mask = mask)
 
-                                    # save as temporary file, overwrite img_path to point to new file
-                                    img_path = os.path.join(self.root_folder, self.input_folder, img_file + '_masked.jpg')
-                                    cv2.imwrite(img_path, masked_image)
-                                except Exception as ex:
-                                    self.log.error(f'classify_nr: could not apply mask on {img_path} with mask width {image_width} and width {image_height}: ' + str(ex))
+                                # save as temporary file, overwrite img_path to point to new file
+                                img_path = os.path.join(self.root_folder, self.input_folder, img_file + '_masked.jpg')
+                                cv2.imwrite(img_path, masked_image)
+                            except Exception as ex:
+                                self.log.warning(f'classify_nr: could not apply mask on {img_path} with mask width {image_width} and width {image_height}: ' + str(ex))
 
-                                img = None
-                                masked_image = None
-                                self.log.debug(f'classify_nr: Applied mask to {img_file} for classification.')
-                            pass
+                            # cleaning up
+                            img = None
+                            masked_image = None
+                            self.log.debug(f'classify_nr: Applied mask to {img_file} for classification.')
+
                         try:
                             # open image and pre-process for use with model
-                            img = tf.keras.utils.load_img(img_path, target_size = (256, 256))
-                            img = tf.keras.utils.img_to_array(img)
-                            img = np.expand_dims(img, axis = 0)
+                            if os.path.isfile(img_path):
+                                img = tf.keras.utils.load_img(img_path, target_size = (256, 256))
+                                img = tf.keras.utils.img_to_array(img)
+                                img = np.expand_dims(img, axis = 0)
+                            else:
+                                self.log.warning(f'classify_nr: {img_path} does not exist.')
+                                continue
+
                         except Exception as ex:
-                            self.log.error(f'classify_nr: could not open {img_file}: ' + str(ex))
-                            pass
+                            self.log.error(f'classify_nr: could not classify {img_file}: ' + str(ex))
+                            continue
 
                         try:
                             # use model to predict if this image contains a train
@@ -1200,13 +1247,12 @@ class image_capture:
 
                         except Exception as ex:
                             self.log.error(f'classify_nr: something went wrong processing {img_path}: ' + str(ex))
-                            pass
+                            continue
 
                         # if mask was applied, clean up temporary file
                         if self.conf_value('nr_mask'):
                             if os.path.isfile(img_path):
                                 os.remove(img_path)
-                            pass
 
                     else:
                         self.record["classified"] = True
@@ -1508,7 +1554,8 @@ class image_capture:
                 try:
                     # move image files
                     for img_file in self.image_file_names:
-                        shutil.move(os.path.join(self.root_folder, self.input_folder, img_file), self.output_folder_train)
+                        if os.path.isfile(os.path.join(self.root_folder, self.input_folder, img_file)):
+                            shutil.move(os.path.join(self.root_folder, self.input_folder, img_file), self.output_folder_train)
                 except Exception as ex:
                     self.log.error(f'archive_files: could not move {img_file} with type {self.record["file_type"]} to {self.output_folder_train}: ' + str(ex))
 
@@ -1626,11 +1673,16 @@ class image_capture:
             self.detections = []
 
         #1 - Access camera data (download mp4 video to Inbox):
+        data_acquired = False
         if not self.conf_value('disable_capture'):
-            self.acquire_camera_data(self.cam_num)
+            data_acquired = self.acquire_camera_data(self.cam_num)
         else:
             # quit function, nothing to do.
             return True
+
+        if not data_acquired:
+            self.log.warning(f'process: getting image data for camera {self.cam_num} failed, skipping.')
+            return False
 
         if not self.new_data:
             self.log.debug(f'process: no new data from camera {self.cam_num}, skipping.')
