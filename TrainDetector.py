@@ -748,25 +748,28 @@ class image_capture:
         self.log.info(f'image_capture (init): copleted configuration of camera {self.cam_num}')
 
     def load_model(self):
-        nr_version = self.conf_value('nr_version') # read model version from configuration file
+        conf_nr_version = int(self.conf_value('nr_version')) # read model version from configuration file
+        nr_version = -1
         model_file_name = ''
         model_file_name_keras = ''
         loaded_model = ''
         #self.loaded_nr_version = -1
-        self.nr_model = False
-        self.nr_disable = True
 
-        self.log.debug(f'load_model: camera {self.cam_num}, nr_disable: {self.nr_disable}, current loaded model version: {self.loaded_nr_version}, configuration file: {nr_version}.')
+        self.log.debug(f'load_model: camera {self.cam_num}, nr_disable: {self.nr_disable}, current loaded model version: {self.loaded_nr_version}, configuration file: {conf_nr_version}.')
 
         # Load model when configured version larger than previously loaded version
         if self.conf_value('nr_enable'):
             # Check if there is a newer model version in the models folder
-            next_version = self.loaded_nr_version + 1
-            if os.path.isfile(os.path.join(self.root_folder, 'models', 'neural networks', f'cam{self.cam_num}_model_v{next_version}.h5')):
+            next_version = int(max(self.loaded_nr_version, conf_nr_version) + 1)
+            next_model_name = f'cam{self.cam_num}_model_v{next_version}.keras'
+
+            if os.path.isfile(os.path.join(self.root_folder, 'models', 'neural networks', next_model_name)):
                 nr_version = next_version
                 self.log.info(f'load_model: Found new model for camera {self.cam_num}; new version: {nr_version}, previous: {self.loaded_nr_version}')
+            elif conf_nr_version > self.loaded_nr_version:
+                nr_version = conf_nr_version
 
-            if nr_version != self.loaded_nr_version:
+            if nr_version > self.loaded_nr_version:
                 self.log.info(f'load_model: Loading new model for camera {self.cam_num}; new version: {nr_version}, previous: {self.loaded_nr_version}')
                 try:
                     model_version = int(nr_version)
@@ -774,6 +777,8 @@ class image_capture:
                     model_file_name_keras = os.path.join(self.root_folder, 'models', 'neural networks', f'cam{self.cam_num}_model_v{model_version}.keras')
                 except Exception as ex:
                     self.log.error(f'load_model: Could not determine model version:' + str(ex))
+                    if self.loaded_nr_version == -1:
+                        self.nr_disable = True
                     return False
 
                 try:
@@ -787,6 +792,8 @@ class image_capture:
 
                     else:
                         self.log.error(f'load_model: Could not load model {model_file_name_keras} or {model_file_name}, none of them exists.')
+                        if self.loaded_nr_version == -1:
+                            self.nr_disable = True
                         return False
 
                     self.nr_disable = False
@@ -794,8 +801,9 @@ class image_capture:
                     self.log.info(f'load_model: successfully loaded {loaded_model} for camera {self.cam_num}.')
                 except Exception as ex:
                     # disable classification if loading model failed
-                    self.nr_model = False
-                    self.nr_disable = True
+                    if self.loaded_nr_version == -1:
+                        self.nr_model = False
+                        self.nr_disable = True
                     self.log.error(f'load_model: Could not load model {model_file_name}:' + str(ex))
                     return False
             else:
@@ -1667,7 +1675,8 @@ class image_capture:
         self.record['longitude'] = self.conf_value('longitude')
 
         #0a - Load new model if different version obtained
-        if self.conf_value('nr_version') != self.loaded_nr_version:
+        #if (self.conf_value('nr_version') != self.loaded_nr_version):
+        if True:
             self.nr_disable = False
             self.load_model()
             self.detections = []
