@@ -4,12 +4,22 @@
 #
 # Author:      Georg Denoix
 #
-# Updated:     17-05-2023
-# Copyright:   (c) Georg Denoix 2023
+# Updated:     28-07-2026
+# Copyright:   (c) Georg Denoix 2023-2026
 # Licence:     open source
 #-------------------------------------------------------------------------------
 
-import requests, os, cv2, shutil, math, hashlib, imutils, logging, logging.handlers, subprocess, yt_dlp
+import requests
+import os
+import cv2
+import shutil
+import math
+import hashlib
+import imutils
+import logging
+import logging.handlers
+import subprocess
+import yt_dlp
 import time as tm
 from datetime import datetime, timedelta, time
 import tensorflow as tf
@@ -18,13 +28,13 @@ import pandas as pd
 from tensorflow.keras.models import load_model
 import json
 from facebook import GraphAPI
-import sys
 import sqlite3
 from google.transit import gtfs_realtime_pb2
 from collections import Counter
 from astral import LocationInfo
 from astral.sun import sun
 import pytz
+from pathlib import Path
 
 class train_location:
 
@@ -39,7 +49,8 @@ class train_location:
         self.static_gtfs_folder = static_gtfs_folder
 
         # list of valid agencies
-        self.valid_agencies = ['via', 'amtrak', 'exo', 'go']
+        #self.valid_agencies = ['via', 'amtrak', 'exo', 'go']
+        self.valid_agencies = ['via', 'exo', 'go']
 
         # initialize data
         self.reset(agencies.copy())
@@ -628,15 +639,23 @@ class train_location:
     def format_eqt_list(self, eqt_list_in, date = ''):
         eqt_print = []
         eqt_list = ''
+        exclude = ['3 VEN', '4 VEN', '5 VEN']
 
         eqt_print.append(f'Equipment list for {date}:')
         try:
             for train in eqt_list_in:
+                # check if any cars returned:
                 if len(train[1]) > 0:
-                    eqt_str = f'{train[0]}: {train[1]}'
-                    if train[1][-3:] != 'VEN':
-                        eqt_str += ' ⚠️'
-                    eqt_print.append(eqt_str)
+                    # exclude regular Venture sets ("4 VEN" or "5 VEN")
+                    if not(train[1] in exclude):
+                        eqt_str = f'{train[0]}: {train[1]}'
+                        # Add indication for legacy equipment (anything not Venture
+                        if train[1][-3:] != 'VEN':
+                            eqt_str += ' 🚂'
+                        # Add indication for long Venture sets (6 or more VEN)
+                        if train[1][-3:] == 'VEN' and train[1][1] in ['6', '7', '8']:
+                            eqt_str += ' <->'
+                        eqt_print.append(eqt_str)
 
         except Exception as ex:
             self.log.error(f'format_eqt_list: failed with error {ex}.')
@@ -650,7 +669,8 @@ class train_location:
 
     # generate list of equipment for any given day
     def get_day_equipment(self, date = '', train_list = []):
-        train_list = ['20', '22', '622', '24', '624', '26', '28', '38', '31', '33', '633', '35', '37', '637', '39', '29']
+        #train_list = ['20', '22', '622', '24', '624', '26', '28', '38', '31', '33', '633', '35', '37', '637', '39', '29']
+        train_list = ['20', '22', '622', '24', '624', '26', '28', '38', '31', '33', '633', '35', '37', '637', '39', '29', '60', '61', '62', '63', '64', '65', '67', '68', '69', '668', '669']
         eqt_list = []
         eqt_print = ''
 
@@ -717,6 +737,8 @@ class train_location:
 class image_capture:
 
     def __init__(self, root_folder = '', input_root_folder = 'inbox', output_root_folder = 'results', cam_id = 0, configuration_file = 'train_detection_configuration.csv', fb_credential_file = '', db_file = ''):
+
+
 
         # event logging
         self.log = logging.getLogger(__name__)
@@ -793,6 +815,7 @@ class image_capture:
         self.loaded_nr_version = -1   # keep to identify if new version specified
 
         self.detections = []
+        self.posts = []
 
         # read configuration
         self.read_configuration()
@@ -801,7 +824,7 @@ class image_capture:
         try:
             self.load_model()
             self.log.debug(f'image_capture (init): Completed loading detection model for camera {cam_id}.')
-        except:
+        except Exception as ex:
             self.log.error(f'image_capture (init): Could not load detection model for camera {cam_id}: ' + str(ex))
 
         # read facebook credentials
@@ -822,10 +845,56 @@ class image_capture:
         # if cam num is already specified, create folder structure
         if os.path.isdir(self.root_folder):
             self.set_input_folder()
-            if cam_id != None:
+            if cam_id is not None:
                 self.set_output_folder()
 
         self.log.info(f'image_capture (init): completed configuration of camera {self.cam_id}')
+
+        # browser configuration
+        #self.CAM_URL = f"https://www.quebec511.info/Carte/Fenetres/camera.ashx?id={CAM_ID}&format=mp4"
+        self.MAP_URL = "https://www.quebec511.info/en/Carte/Index.aspx"
+        self.COOKIE_CACHE = Path(__file__).parent / "cookies.json"
+        self.USER_AGENT = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
+
+        self.HEADERS = {
+            "User-Agent": self.USER_AGENT,
+            "Accept": "*/*",
+            "Referer": "https://www.quebec511.info/",
+        }
+
+        self.cookies = self.load_cached_cookies()
+
+    # code added 2026-07-24 to solve 511.qc cloudflare protection
+    def load_cached_cookies(self) -> dict:
+        if self.COOKIE_CACHE.exists():
+            return json.loads(self.COOKIE_CACHE.read_text())
+        return {}
+
+    def save_cookies(self, cookies: dict) -> None:
+        self.COOKIE_CACHE.write_text(json.dumps(cookies))
+
+    def fetch_fresh_cookies(self) -> dict:
+        """Launch a real browser to solve Cloudflare's challenge and return cookies."""
+        from patchright.sync_api import sync_playwright
+
+        self.log.info("fetch_fresh_cookies: Refreshing Cloudflare clearance via headless browser...")
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(user_agent=self.USER_AGENT)
+            page = context.new_page()
+            page.goto(self.MAP_URL, wait_until="networkidle")
+            # Give Cloudflare's JS challenge time to resolve if one appears.
+            tm.sleep(5)
+            cookies = {c["name"]: c["value"] for c in context.cookies()}
+            browser.close()
+
+        if "cf_clearance" not in cookies:
+            self.log.info('fetch_fresh_cookies: Warning: cf_clearance not found — challenge may not have cleared.')
+        self.save_cookies(cookies)
+        return cookies
 
 
     def load_model(self):
@@ -1072,12 +1141,34 @@ class image_capture:
 
         return True
 
+    def download_clip(self, cam_URL, cookies: dict) -> requests.Response:
+        return requests.get(cam_URL, headers=self.HEADERS, cookies=cookies, timeout=15)
+
     def grab_file(self, cam_URL = '', input_file_path = ''):
         self.log.debug(f'grab_file: getting data from {cam_URL} to save in {input_file_path}')
 
         try:
             # access video stream
-            response = requests.get(cam_URL, stream = True, verify = False, timeout = 5)
+            # old code: response = requests.get(cam_URL, stream = True, verify = False, timeout = 5)
+
+            #new code with
+            response = self.download_clip(cam_URL, self.cookies) if self.cookies else None
+
+            if response is None or response.status_code == 403:
+                self.log.info('grab_file: response is None or response status_code was 403')
+                cookies = self.fetch_fresh_cookies()
+                response = self.download_clip(cam_URL, cookies)
+
+            if response.status_code == 200:
+                self.log.info(f'grab_file: got response code 200 from {cam_URL}')
+                #self.OUTPUT_FILE.write_bytes(response.content)
+                #self.log.info(f'grab_file: Saved {len(response.content):,} bytes to {OUTPUT_FILE}')
+                pass # writing response content is done below.
+            else:
+                self.log.error(f"grab_file: download of {cam_URL} failed with HTTP response: {response.status_code}")
+                self.log.error(response.text[:1000])
+                return False
+
         except Exception as ex:
             self.log.error(f'grab_file: cam {self.cam_id} - something went wrong downloading data from {cam_URL}: ' + str(ex))
 
@@ -1254,9 +1345,10 @@ class image_capture:
             #restore last file name
             self.file_name = last_file_name
 
-            # delete new file (because its content is identical yo the last file
+            # delete new file (because its content is identical to the last file
             try:
-                os.remove(input_file_path)
+                if os.path.isfile(input_file_path):
+                    os.remove(input_file_path)
             except Exception as ex:
                 self.log.error(f'acquire_camera_data: could not delete {input_file_path}: {str(ex)}')
 
@@ -1609,7 +1701,7 @@ class image_capture:
         return True
 
 
-    # To log timestamp of setection (used for threshold evaluation)
+    # To log timestamp of detection (used for threshold evaluation)
     def log_detection(self, max_age = 48):
         current_time = datetime.now()
         cutoff_time = current_time - timedelta(hours = max_age)
@@ -1623,12 +1715,31 @@ class image_capture:
 
         return True
 
+    # To log timestamp of post (used for threshold evaluation)
+    def log_post(self, max_age = 48):
+        current_time = datetime.now()
+        cutoff_time = current_time - timedelta(hours = max_age)
+
+        self.posts.append(current_time) # add current time
+
+        self.log.info(f'log_post: cam {self.cam_id} - logged post at {current_time}; total {len(self.posts)} in log.')
+
+        return True
+
     # Return count of detections in past xx hours
     def detection_cnt(self, threshold_hours = 1):
         cutoff_time = datetime.now() - timedelta(hours = threshold_hours)
         count = sum(1 for entry in self.detections if entry >= cutoff_time)
 
         self.log.debug(f'detection_cnt: cam {self.cam_id} - returned {count} detections for the past {threshold_hours} hours, from {len(self.detections)} overall logged detections.')
+        return count
+
+    # Return count of detections in past xx hours
+    def post_cnt(self, threshold_hours = 1):
+        cutoff_time = datetime.now() - timedelta(hours = threshold_hours)
+        count = sum(1 for entry in self.posts if entry >= cutoff_time)
+
+        self.log.debug(f'post_cnt: cam {self.cam_id} - returned {count} posts for the past {threshold_hours} hours, from {len(self.posts)} overall logged detections.')
         return count
 
     # function to generate image caption
@@ -1661,11 +1772,24 @@ class image_capture:
                     train_descriptions.append(train_info.train_description(train, include_carlist))
 
                 if len(train_descriptions) > 0:
-                    caption += ' Train on picture could be: ' + ' or '.join(train_descriptions)
+                    caption += '\nTrain on picture could be: ' + ' or '.join(train_descriptions)
 
         except Exception as ex:
             self.log.error('generate_caption: ' + str(ex))
-            pass
+
+        # add YouTube link
+        try:
+            if self.conf_value('cam_type') == 'youtube':
+                caption += f'\nCamera Link: https://www.youtube.com/watch?v={self.cam_id}'
+        except Exception as ex:
+            self.log.error('generate_caption: ' + str(ex))
+
+        # add OpenRailwayMap link
+        try:
+            if (self.conf_value("latitude") != 0) and (self.conf_value("longitude") != 0):
+                caption += f'\nCamera location: https://www.openrailwaymap.org/?style=standard&lat={self.conf_value("latitude")}&lon={self.conf_value("longitude")}&zoom=17'
+        except Exception as ex:
+            self.log.error('generate_caption: ' + str(ex))
 
         self.record["caption"] = caption
 
@@ -1882,12 +2006,12 @@ class image_capture:
         time_limit_ok = True
 
         # 1 - limit per hour
-        hour_cnt = self.detection_cnt(1)
+        hour_cnt = self.post_cnt(1)
         hour_limit = self.conf_value("hour_limit", 20)
         time_limit_ok = hour_cnt <= hour_limit
 
         # 2 - limit per day
-        day_cnt = self.detection_cnt(24)
+        day_cnt = self.post_cnt(24)
         day_limit = self.conf_value("day_limit", 120)
         time_limit_ok = time_limit_ok and day_cnt <= day_limit
 
@@ -1930,6 +2054,7 @@ class image_capture:
             try:
                 if self.conf_value('fb_posting'):
                     self.fb.publish_train(self)
+                    self.log_post()
                 else:
                     self.log.debug(f'process: not posting {self.file_name}, not configured for fb posting.')
             except Exception as ex:
