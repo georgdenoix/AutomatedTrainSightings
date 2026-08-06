@@ -11,6 +11,7 @@
 
 import requests
 import os
+import base64
 import cv2
 import shutil
 import math
@@ -34,7 +35,7 @@ from collections import Counter
 from astral import LocationInfo
 from astral.sun import sun
 import pytz
-from pathlib import Path
+from patchright.sync_api import sync_playwright
 
 class train_location:
 
@@ -50,7 +51,8 @@ class train_location:
 
         # list of valid agencies
         #self.valid_agencies = ['via', 'amtrak', 'exo', 'go']
-        self.valid_agencies = ['via', 'exo', 'go']
+        #self.valid_agencies = ['via', 'exo', 'go'] == removing exo and go temporarily
+        self.valid_agencies = ['via']
 
         # initialize data
         self.reset(agencies.copy())
@@ -216,7 +218,6 @@ class train_location:
     def train_description(self, train_info = {}, include_carlist = False):
 
         train_str = ''
-        via_carlist = ''
 
         #self.log.debug(f'train_description: building description for {train_info["agency"]} {train_info["id"]}, include car list: {include_carlist}.')
 
@@ -280,7 +281,7 @@ class train_location:
                                 if stop_time_update.stop_id == stop_id:
                                     arrival_delay = int(stop_time_update.arrival.delay / 60)
         except Exception as ex:
-            self.log.error(f"get_delay: " + str(ex))
+            self.log.error("get_delay: " + str(ex))
         return arrival_delay
 
     # generic function to get trains from all agencies
@@ -297,7 +298,7 @@ class train_location:
         for agency in agencies:
 
             # do not process if agency is not in list of valid agencies
-            if not agency in self.valid_agencies:
+            if agency not in self.valid_agencies:
                 self.log.error(agency + ' is not in ' + str(self.valid_agencies))
                 continue
 
@@ -369,8 +370,9 @@ class train_location:
                     try:
                         try:
                             trip_id = vehicle.trip.trip_id if isinstance(vehicle.trip.trip_id, int) else int(vehicle.trip.trip_id)   # fixed
-                        except:
+                        except Exception as ex:
                             trip_id = vehicle.trip.trip_id
+                            self.log.error(f"read_trains: {ex}")
 
                         train_info['trip_id'] = vehicle.trip.trip_id
                         train_info['id'] = ''
@@ -454,7 +456,7 @@ class train_location:
                         # extract route id
                         try:
                             route_id = vehicle.trip.route_id if isinstance(vehicle.trip.route_id, int) else int(vehicle.trip.route_id)  # fixed
-                        except:
+                        except Exception:
                             route_id = vehicle.trip.route_id
 
                         #get the route name from GTFS "routes" table as "route_long_name"
@@ -481,14 +483,14 @@ class train_location:
                             train_info['asm_url'] = f'https://asm.transitdocs.com/train/{vehicle.trip.start_date[0:4]}/{vehicle.trip.start_date[4:6]}/{vehicle.trip.start_date[6:8]}/V/{vehicle.vehicle.id[15:]}'
                             #train_info['id_alt'] = vehicle.vehicle.id[15:]
                             train_info['trip_start'] = f'{vehicle.trip.start_date[0:4]}-{vehicle.trip.start_date[4:6]}-{vehicle.trip.start_date[6:8]}'
-                        except:
+                        except Exception:
                             train_info['asm_url'] = ''
                     elif agency == 'amtrak':
                         try:
                             train_info['asm_url'] = f'https://asm.transitdocs.com/train/{vehicle.trip.start_date[0:4]}/{vehicle.trip.start_date[4:6]}/{vehicle.trip.start_date[6:8]}/A/{vehicle.vehicle.id[15:]}'
                             #train_info['id_alt'] = vehicle.vehicle.id[15:]
                             train_info['trip_start'] = f'{vehicle.trip.start_date[0:4]}-{vehicle.trip.start_date[4:6]}-{vehicle.trip.start_date[6:8]}'
-                        except:
+                        except Exception:
                             train_info['asm_url'] = ''
                     else:
                         train_info['asm_url'] = ''
@@ -565,7 +567,7 @@ class train_location:
                 # Try to parse the date string with the specified format
                 datetime.strptime(trip_start, "%Y-%m-%d")
                 traincar_data['date'] = trip_start
-            except Exception as ex:
+            except Exception:
                 # If parsing fails, it’s not a valid date in this format
                 self.log.error("get_equipment:", trip_start, "was not a valid trip start date, using today's date.")
                 traincar_data['date'] = datetime.now().strftime("%Y-%m-%d")
@@ -647,7 +649,7 @@ class train_location:
                 # check if any cars returned:
                 if len(train[1]) > 0:
                     # exclude regular Venture sets ("4 VEN" or "5 VEN")
-                    if not(train[1] in exclude):
+                    if train[1] not in exclude:
                         eqt_str = f'{train[0]}: {train[1]}'
                         # Add indication for legacy equipment (anything not Venture
                         if train[1][-3:] != 'VEN':
@@ -660,7 +662,7 @@ class train_location:
         except Exception as ex:
             self.log.error(f'format_eqt_list: failed with error {ex}.')
 
-        eqt_print.append(f'Data from VIA Rail through traincar.info - subject to change at any time, actual equipment may differ. Appreciate corrections in comments to this post.')
+        eqt_print.append('Data from VIA Rail through traincar.info - subject to change at any time, actual equipment may differ. Appreciate corrections in comments to this post.')
         eqt_list = '\n'.join(eqt_print)
 
         self.log.info(f'format_eqt_list: returning {eqt_list}.')
@@ -697,7 +699,7 @@ class train_location:
         try:
 
             if (lon_cam == 0) or (lat_cam == 0):
-                self.log.debug(f'nearby_trains: skipping, reference location is not set.')
+                self.log.debug('nearby_trains: skipping, reference location is not set.')
                 return nearby_trains
             else:
                 self.log.debug(f'nearby_trains: comparing train positions with camera location {lat_cam}, {lon_cam}; max distance: {max_dist} m, max data age: {max_age} s.')
@@ -717,7 +719,7 @@ class train_location:
                 # distance:
                 dst_est = self.calculate_distance(lat_cam, lon_cam, train_info['latitude_est'], train_info['longitude_est'])
                 dst = self.calculate_distance(lat_cam, lon_cam, train_info['latitude'], train_info['longitude'])
-                dst_str = str(round(dst)) # distance in m
+                #dst_str = str(round(dst)) # distance in m (not used)
 
                 str_train = f'{self.train_description(train_info)}, dst_est: {int(dst_est)}m [{max_dist_t}m] (from {int(dst)}m), age: {timedelta.seconds}s [{max_age_t}s], {train_info["speed"]}km/h [{min_speed}km/h].'
 
@@ -734,9 +736,167 @@ class train_location:
         return nearby_trains
 
 
+class CloudflareSession:
+    """
+    One shared patchright browser context, reused across all cameras, used to
+    get past Cloudflare's bot protection on quebec511.info.
+
+    Why shared: Cloudflare's cf_clearance cookie is bound to the TLS
+    fingerprint (JA3) of the client that solved the challenge, so the actual
+    file download has to go through the same browser context that solved it
+    (requests won't work, even with the right cookie). And launching a
+    separate patchright/Playwright driver per camera (one per image_capture
+    instance) causes "Sync API inside the asyncio loop" errors and wastes a
+    browser process per camera - so this is instantiated once in main() and
+    passed into every image_capture.
+    """
+
+    MAP_URL = "https://www.quebec511.info/en/Carte/Index.aspx"
+    USER_AGENT = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+    )
+
+    def __init__(self):
+        self.log = logging.getLogger(__name__)
+        self._pw = None
+        self._browser = None
+        self._context = None
+        self._page = None  # kept loaded on MAP_URL; all fetches happen in-page from here
+
+    def _ensure_context(self):
+        if self._context is not None:
+            return
+        self.log.debug("CloudflareSession._ensure_context: launching browser")
+        self._pw = sync_playwright().start()
+        self._browser = self._pw.chromium.launch(headless=False, slow_mo=200)
+        #self._context = self._browser.new_context(user_agent=self.USER_AGENT)
+        self._context = self._browser.new_context()
+        self._solve_challenge()
+
+    def _solve_challenge(self):
+        """
+        (Re)load the map page in a persistent page and wait for cf_clearance.
+        Fetches are then issued from this same page via page.evaluate(fetch),
+        not via navigation - so they carry the same Referer/Origin/Sec-Fetch-*
+        metadata as a real in-page video request, not a bare top-level
+        navigation to the .ashx URL (which the site's WAF appears to treat
+        differently even with a valid cf_clearance cookie).
+        """
+        self.log.info("CloudflareSession._solve_challenge: refreshing Cloudflare clearance")
+        if self._page is not None:
+            try:
+                self._page.close()
+            except Exception:
+                pass
+        self._page = self._context.new_page()
+        self._page.goto(self.MAP_URL, wait_until="domcontentloaded")
+        self._page.wait_for_load_state("networkidle")
+        self._page.wait_for_timeout(5000)
+
+        cleared = False
+        for _ in range(20):  # poll up to ~10s
+            cookies = {c["name"]: c["value"] for c in self._context.cookies()}
+            if "cf_clearance" in cookies:
+                cleared = True
+                break
+            tm.sleep(0.5)
+
+        self.log.debug("CloudflareSession._solve_challenge: Title: %s", self._page.title())
+        self.log.debug("CloudflareSession._solve_challenge: URL: %s", self._page.url)
+
+        cookies = self._context.cookies()
+        for c in cookies:
+            self.log.debug("CloudflareSession._solve_challenge: %s = %s", c["name"], c["value"][:20])
+
+
+        if not cleared:
+            self.log.warning("CloudflareSession._solve_challenge: cf_clearance not found — challenge may not have cleared")
+
+
+    def get(self, url: str, headers: dict = None, timeout: int = 5000):
+        """Fetch a URL from inside the already-loaded map page, retrying once on 403."""
+        self.log.debug(f"CloudflareSession.get: calling _fetch_via_page with {url} and timeout {timeout}")
+        response = self._fetch_via_page(url = url, timeout = timeout)
+
+        if response is None or response.status == 403:
+            self.log.debug("CloudflareSession.get: got 403, re-solving Cloudflare challenge and retrying")
+            self._solve_challenge()
+            response = self._fetch_via_page(url, timeout)
+
+        return response
+
+    # Run inside the already-loaded map page (self._page): does an in-page
+    # fetch() - real Chromium network stack, same Referer/Origin/TLS
+    # fingerprint as the page that solved the challenge, unlike
+    # context.request (separate HTTP client, confirmed still 403'd even with
+    # valid cf_clearance + __cf_bm). Reads the body via JS ArrayBuffer rather
+    # than CDP's Network.getResponseBody, since Chrome's native <video>
+    # element streams through its media pipeline and never buffers a body
+    # CDP can retrieve ("No data found for resource with given identifier").
+    # Base64-encodes in chunks to avoid call-stack limits on large arrays.
+    _FETCH_JS = """
+    async ({url, timeoutMs}) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const resp = await fetch(url, { credentials: 'include', signal: controller.signal });
+            const buf = await resp.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            let binary = '';
+            const chunkSize = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+            }
+            const body_b64 = btoa(binary);
+            const text = resp.ok ? '' : new TextDecoder().decode(bytes);
+            return { status: resp.status, ok: resp.ok, body_b64: body_b64, text: text };
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+    """
+
+    def _fetch_via_page(self, url: str, timeout: int = 15000):
+        self._ensure_context()
+        self.log.debug(f"CloudflareSession._fetch_via_page: downloading {url}")
+
+        try:
+            result = self._page.evaluate(self._FETCH_JS, {"url": url, "timeoutMs": timeout})
+            body_bytes = base64.b64decode(result["body_b64"])
+
+            self.log.info(
+                f"CloudflareSession._fetch_via_page: status {result['status']}, {len(body_bytes):,} bytes"
+            )
+
+            return _CapturedResponse(
+                status=result["status"], ok=result["ok"], body_bytes=body_bytes, text_str=result["text"]
+            )
+
+        except Exception as ex:
+            self.log.error(f"CloudflareSession._fetch_via_page: {ex}")
+            return None
+
+class _CapturedResponse:
+    """Minimal stand-in matching the .status / .ok / .body() / .text() surface
+    that grab_file() already expects, so it needn't know the data came from
+    a page navigation rather than an APIResponse."""
+
+    def __init__(self, status, ok, body_bytes, text_str):
+        self.status = status
+        self.ok = ok
+        self._body = body_bytes
+        self._text = text_str
+
+    def body(self):
+        return self._body
+
+    def text(self):
+        return self._text
+
 class image_capture:
 
-    def __init__(self, root_folder = '', input_root_folder = 'inbox', output_root_folder = 'results', cam_id = 0, configuration_file = 'train_detection_configuration.csv', fb_credential_file = '', db_file = ''):
+    def __init__(self, root_folder = '', input_root_folder = 'inbox', output_root_folder = 'results', cam_id = 0, configuration_file = 'train_detection_configuration.csv', fb_credential_file = '', db_file = '', cf_session = None):
 
 
 
@@ -851,50 +1011,14 @@ class image_capture:
         self.log.info(f'image_capture (init): completed configuration of camera {self.cam_id}')
 
         # browser configuration
-        #self.CAM_URL = f"https://www.quebec511.info/Carte/Fenetres/camera.ashx?id={CAM_ID}&format=mp4"
-        self.MAP_URL = "https://www.quebec511.info/en/Carte/Index.aspx"
-        self.COOKIE_CACHE = Path(__file__).parent / "cookies.json"
-        self.USER_AGENT = (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        )
-
+        # code added 2026-07-24, revised 2026-07-31 to solve 511.qc cloudflare protection:
+        # one shared CloudflareSession (see below/module level) is created once in main()
+        # and passed to every camera, instead of each camera launching its own browser.
         self.HEADERS = {
-            "User-Agent": self.USER_AGENT,
             "Accept": "*/*",
             "Referer": "https://www.quebec511.info/",
         }
-
-        self.cookies = self.load_cached_cookies()
-
-    # code added 2026-07-24 to solve 511.qc cloudflare protection
-    def load_cached_cookies(self) -> dict:
-        if self.COOKIE_CACHE.exists():
-            return json.loads(self.COOKIE_CACHE.read_text())
-        return {}
-
-    def save_cookies(self, cookies: dict) -> None:
-        self.COOKIE_CACHE.write_text(json.dumps(cookies))
-
-    def fetch_fresh_cookies(self) -> dict:
-        """Launch a real browser to solve Cloudflare's challenge and return cookies."""
-        from patchright.sync_api import sync_playwright
-
-        self.log.info("fetch_fresh_cookies: Refreshing Cloudflare clearance via headless browser...")
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(user_agent=self.USER_AGENT)
-            page = context.new_page()
-            page.goto(self.MAP_URL, wait_until="networkidle")
-            # Give Cloudflare's JS challenge time to resolve if one appears.
-            tm.sleep(5)
-            cookies = {c["name"]: c["value"] for c in context.cookies()}
-            browser.close()
-
-        if "cf_clearance" not in cookies:
-            self.log.info('fetch_fresh_cookies: Warning: cf_clearance not found — challenge may not have cleared.')
-        self.save_cookies(cookies)
-        return cookies
+        self.cf_session = cf_session
 
 
     def load_model(self):
@@ -1141,8 +1265,12 @@ class image_capture:
 
         return True
 
-    def download_clip(self, cam_URL, cookies: dict) -> requests.Response:
-        return requests.get(cam_URL, headers=self.HEADERS, cookies=cookies, timeout=15)
+    def download_clip(self, cam_url: str):
+        """GET the clip through the shared browser context (same TLS fingerprint as the challenge)."""
+        if not self.cf_session:
+            self.log.error('download_clip: no cf_session configured for this camera.')
+            return None
+        return self.cf_session.get(cam_url, headers = self.HEADERS, timeout = 15000)
 
     def grab_file(self, cam_URL = '', input_file_path = ''):
         self.log.debug(f'grab_file: getting data from {cam_URL} to save in {input_file_path}')
@@ -1150,23 +1278,18 @@ class image_capture:
         try:
             # access video stream
             # old code: response = requests.get(cam_URL, stream = True, verify = False, timeout = 5)
+            response = self.download_clip(cam_URL)
 
-            #new code with
-            response = self.download_clip(cam_URL, self.cookies) if self.cookies else None
+            if response is None:
+                self.log.error(f'grab_file: cam {self.cam_id} - no response for {cam_URL}')
+                return False
 
-            if response is None or response.status_code == 403:
-                self.log.info('grab_file: response is None or response status_code was 403')
-                cookies = self.fetch_fresh_cookies()
-                response = self.download_clip(cam_URL, cookies)
-
-            if response.status_code == 200:
-                self.log.info(f'grab_file: got response code 200 from {cam_URL}')
-                #self.OUTPUT_FILE.write_bytes(response.content)
-                #self.log.info(f'grab_file: Saved {len(response.content):,} bytes to {OUTPUT_FILE}')
+            if response.status == 200:
+                self.log.debug(f'grab_file: got response code 200 from {cam_URL}')
                 pass # writing response content is done below.
             else:
-                self.log.error(f"grab_file: download of {cam_URL} failed with HTTP response: {response.status_code}")
-                self.log.error(response.text[:1000])
+                self.log.error(f"grab_file: download of {cam_URL} failed with HTTP response: {response.status}")
+                self.log.error(response.text()[:1000])
                 return False
 
         except Exception as ex:
@@ -1181,12 +1304,8 @@ class image_capture:
             if self.conf_value('cam_format') == 'mp4':
                 try:
                     # open video file for writing
-                    video_file = open(input_file_path, 'wb')
-                    for block in response.iter_content(1024):
-                        if not block:
-                            break
-                        video_file.write(block)
-                    video_file.close()
+                    with open(input_file_path, 'wb') as video_file:
+                        video_file.write(response.body())
 
                 except Exception as ex:
                     self.log.error(f'grab_file: cam {self.cam_id} - could not save: {input_file_path}. Exception: {str(ex)}')
@@ -1195,7 +1314,7 @@ class image_capture:
             else:
                 try:
                     # read downloaded image data
-                    img_array = np.asarray(bytearray(response.content), dtype=np.uint8)
+                    img_array = np.asarray(bytearray(response.body()), dtype=np.uint8)
                     img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
                     cropped_img = img
 
@@ -1214,7 +1333,7 @@ class image_capture:
                                     cropped_img = img[y_start:y_end, x_start:x_end]
                                 else:
                                     self.log.warn(f'grab_file: cam {self.cam_id} - image area {self.file_name} of {width}x{height} is out of bounds from {crop_coordinates_str}.')
-                        except:
+                        except Exception:
                             cropped_img = img
 
 
@@ -1229,7 +1348,7 @@ class image_capture:
                     self.log.error(f'grab_file: cam {self.cam_id} - could not save: {input_file_path}.')
                     return False
         else:
-            self.log.error(f'grab_file: cam {self.cam_id} - response not ok, response status code = {response.status_code} from {cam_URL}')
+            self.log.error(f'grab_file: cam {self.cam_id} - response not ok, response status code = {response.status} from {cam_URL}')
             return False
 
         self.log.debug(f'grab_file: completed getting data from {cam_URL} to save in {input_file_path}')
@@ -1267,7 +1386,7 @@ class image_capture:
             return False
 
         # override cam_id if necessary
-        if cam_id != None:
+        if cam_id is not None:
             self.cam_id = cam_id
 
         # define time and file name
@@ -1521,8 +1640,8 @@ class image_capture:
         # maximum distance for object tracking
         max_dist = 15
 
-        # minimum motion needed
-        min_motion = 4
+        # minimum motion needed (not used)
+        #min_motion = 4
 
         # store centers of detected motion from previous frame
         pfCenters = []
@@ -1569,7 +1688,7 @@ class image_capture:
             if use_mask:
                 try:
                     maskedImage = cv2.bitwise_and(curFrame, curFrame, mask = mask)
-                except:
+                except Exception:
                     pass
 
             # convert it to grayscale, and blur it to remove noise (radius 21 px)
@@ -1704,7 +1823,7 @@ class image_capture:
     # To log timestamp of detection (used for threshold evaluation)
     def log_detection(self, max_age = 48):
         current_time = datetime.now()
-        cutoff_time = current_time - timedelta(hours = max_age)
+        #cutoff_time = current_time - timedelta(hours = max_age)
 
         self.detections.append(current_time) # add current time
 
@@ -1718,7 +1837,7 @@ class image_capture:
     # To log timestamp of post (used for threshold evaluation)
     def log_post(self, max_age = 48):
         current_time = datetime.now()
-        cutoff_time = current_time - timedelta(hours = max_age)
+        #cutoff_time = current_time - timedelta(hours = max_age)
 
         self.posts.append(current_time) # add current time
 
@@ -1748,7 +1867,7 @@ class image_capture:
         # Construct message for posting
         try:
             cam_text = self.conf_value('cam_description')
-        except:
+        except Exception:
             cam_text = str(self.cam_id)
 
         motion_text = ''
@@ -1800,11 +1919,11 @@ class image_capture:
     def archive_files(self, delete_no_train = True, delete_jpg = False, ignore_threshold = False):
 
         if self.output_folder_notrain == '':
-            self.log.error(f'archive_files: output folder not defined.')
+            self.log.error('archive_files: output folder not defined.')
             return False
 
         if self.output_folder_train == '':
-            self.log.error(f'archive_files: output folder not defined.')
+            self.log.error('archive_files: output folder not defined.')
             return False
 
         # set (create) output folder, just to be sure
@@ -1899,7 +2018,7 @@ class image_capture:
         try:
             df = pd.DataFrame(self.record, index = [0])
         except Exception as ex:
-            self.log.error(f'store_record: error creating data frame: ' + str(ex))
+            self.log.error('store_record: error creating data frame: ' + str(ex))
 
         # store to db
         if to_db:
@@ -1928,7 +2047,7 @@ class image_capture:
                     df.to_csv(data_file, index=False)
 
             except Exception as ex:
-                self.log.error(f'store_record: could not write to csv file: ' + str(ex))
+                self.log.error('store_record: could not write to csv file: ' + str(ex))
 
         return True
 
@@ -1993,7 +2112,7 @@ class image_capture:
 
         # Log detection for threshold evaluation
         if detection_valid:
-            self.log.debug(f'process: detection is valid, incrementing detection count and storing record.')
+            self.log.debug('process: detection is valid, incrementing detection count and storing record.')
             self.record["detection_count"] += 1
 
             # log detection for use in hour and day counts for first detection; others are most likely the same train so do not log them:
@@ -2039,7 +2158,7 @@ class image_capture:
             # Find nearby trains
             if not train_info:
                 self.nearby_trains = []
-                self.log.debug(f'process: no information about nearby trains available, not setting "nearby_trains".')
+                self.log.debug('process: no information about nearby trains available, not setting "nearby_trains".')
             else:
                 lon = self.conf_value('longitude')
                 lat = self.conf_value('latitude')
@@ -2136,8 +2255,8 @@ class fb_helper:
             train.record["fb_id"] = video_id
             train.record['fb_url'] = video_url
 
-        except Expection as ex:
-            self.log.error(f'publish_video: error ' + str(ex))
+        except Exception as ex:
+            self.log.error('publish_video: error ' + str(ex))
             return False
 
         return ret_val
@@ -2168,7 +2287,7 @@ class fb_helper:
                 self.log.debug(f'publish_train: publishing video for camera {train.cam_id} is allowed: {post_video}; inhibited until: {train.fb_video_inhibit}.')
             else:
                 post_video = False
-        except:
+        except Exception:
             post_video = False
 
         # disable video posting during night
@@ -2176,8 +2295,8 @@ class fb_helper:
             train_lat = train.record['latitude']
             train_lon = train.record['longitude']
             self.log.debug(f'publish_train: train position is: {train_lat}, {train_lon}')
-        except:
-            self.log.error(f'publish_train: train.record latitude and longitude are not set.')
+        except Exception:
+            self.log.error('publish_train: train.record latitude and longitude are not set.')
             train_lat = 45.5271
             train_lon = -73.6049
 
@@ -2217,8 +2336,8 @@ class fb_helper:
 
         # initialize return
         ret = False
-        photo_id = 0
-        photo_url = "(not posted)"
+        #photo_id = 0
+        #photo_url = "(not posted)"
 
         # Publish image or video
         try:
@@ -2342,12 +2461,16 @@ def main():
         log.error(str(ex))
         return False
 
+    # single shared browser session for getting past Cloudflare on quebec511.info,
+    # reused by every camera instead of each one launching its own browser
+    cf_session = CloudflareSession()
+
     # construct camera list
     cam_list = []
     for cam_id in configuration['cam_id']:
         try:
             log.info(f'Initializing camera {cam_id}...')
-            cam_list.append(image_capture(root_folder = root_folder, input_root_folder = 'inbox', output_root_folder = 'results', cam_id = cam_id, configuration_file = configuration_file, fb_credential_file = fb_credential_file, db_file = database_file))
+            cam_list.append(image_capture(root_folder = root_folder, input_root_folder = 'inbox', output_root_folder = 'results', cam_id = cam_id, configuration_file = configuration_file, fb_credential_file = fb_credential_file, db_file = database_file, cf_session = cf_session))
             log.info(f'Initializing camera {cam_id} completed.')
         except Exception as ex:
             log.error(f'Error setting up image captures of camera {cam_id}: {str(ex)}.')
@@ -2401,6 +2524,7 @@ def main():
     except KeyboardInterrupt:
         pass
 
+    cf_session.close()
     log.info('Terminating capturing process.')
 
 if __name__ == '__main__':
